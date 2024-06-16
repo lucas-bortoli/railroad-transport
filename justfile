@@ -17,7 +17,7 @@ run_server: build_server
 
 [windows]
 build_server:
-  g++ -g -Wall -o main_server.exe -I /usr/include -I src_railroad src_railroad/*.cpp src_server/*.cpp
+  g++ -g -Wall -o main_server.exe -I src_railroad src_railroad/*.cpp src_server/*.cpp
 
 [windows]
 run_server: build_server
