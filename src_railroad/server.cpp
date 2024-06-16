@@ -2,7 +2,9 @@
 #include "utils.h"
 #include <arpa/inet.h>
 #include <cstring>
+#include <fcntl.h>
 #include <netinet/in.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 Server::Server(std::string listenAddress, unsigned short listenPort)
@@ -69,8 +71,8 @@ PeerConnection* Server::Accept()
     // recvsg/recvfrom retorna uma (1) mensagem por call, e será a mensagem inteira, desde que o buffer dado tenha
     // tamanho suficiente https://stackoverflow.com/a/2547598 https://linux.die.net/man/2/recvfrom
     // Além disso, MSG_WAITALL especifica que a thread vai bloquear até que a mensagem seja dada
-    ssize_t bytesLidos = recvfrom(this->pSockFd, buffer, sizeof(buffer), MSG_WAITALL, (struct sockaddr*)&clientAddress,
-                                  &clientAddressLen);
+    ssize_t bytesLidos =
+        recvfrom(this->pSockFd, buffer, sizeof(buffer), 0, (struct sockaddr*)&clientAddress, &clientAddressLen);
 
     printf("Datagrama lido - %ld bytes\n", bytesLidos);
 

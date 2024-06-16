@@ -13,3 +13,12 @@ build_server:
 [linux]
 run_server: build_server
   ./main_server
+
+
+[windows]
+build_server:
+  g++ -g -Wall -o main_server.exe -I /usr/include -I src_railroad src_railroad/*.cpp src_server/*.cpp
+
+[windows]
+run_server: build_server
+  ./main_server.exe
