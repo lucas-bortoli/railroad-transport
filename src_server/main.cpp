@@ -4,9 +4,14 @@
 
 void HandleClient(PeerConnection* client)
 {
+    printf("HandleClient: novo cliente\n");
+
     std::string packet = "Hello Man";
 
-    client->Send(packet.c_str(), packet.size());
+    while (true)
+    {
+        client->Send(packet.c_str(), packet.size());
+    }
 }
 
 int main(int argc, char** argv)

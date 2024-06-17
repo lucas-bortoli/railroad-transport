@@ -15,9 +15,15 @@ int main(int argc, char** argv)
     client.Connect();
 
     std::string packet = "Hello Man";
-
     client.Send(packet.c_str(), packet.size());
-    printf("Hello World!\n");
+
+    char received[512];
+
+    while (true)
+    {
+        client.Receive(received, sizeof(received));
+        printf("main: Pacote recebido\n");
+    }
 
     /*
     const char* serverIp = "127.0.0.1";     // Server IP address

@@ -1,8 +1,8 @@
 #pragma once
 #include <cstdint>
+#include <list>
 #include <netinet/in.h>
 #include <string>
-#include <vector>
 
 #define DATAFRAME_BODY_LENGTH 256
 
@@ -26,19 +26,21 @@ struct __attribute__((packed)) FrameData
 
 class PeerConnection
 {
-  protected:
-    std::vector<struct FrameData> ReceiveQueue;
-    unsigned long long CurrentSequence;
+  private:
+    struct FrameData _DatagramReceive(bool filter(struct FrameData frame));
+    void _DatagramSendWithAck(struct FrameData frame);
 
-    void _WaitForMessageMatchingFilter();
+  protected:
+    std::list<struct FrameData> ReceiveQueue;
+    unsigned long long CurrentSequence;
 
   public:
     struct sockaddr_in PeerEndpoint;
     int SocketFd;
 
     PeerConnection();
-    void Send(const char* buffer, size_t buffer_length);
-    size_t Receive(char* buffer);
+    void Send(const char* buffer, size_t bufferSize);
+    size_t Receive(char* buffer, size_t bufferSize);
 };
 
 class Server

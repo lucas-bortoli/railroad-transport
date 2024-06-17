@@ -34,7 +34,7 @@ void Server::Bind()
         abort();
     }
 
-    // Bind the socket with the server address
+    // Inicializar o listener
     int err = bind(this->pSockFd, (const struct sockaddr*)&server_addr, sizeof(server_addr));
     if (err < 0)
     {
@@ -65,20 +65,26 @@ PeerConnection* Server::Accept()
     memset(buffer, 0, sizeof(buffer));
 
     // Struct que receberá as informações de IP do cliente para comunicação bilateral
-    struct sockaddr_in clientAddress;
-    socklen_t clientAddressLen;
+    struct sockaddr_in senderAddress;
+    socklen_t senderAddressLen = sizeof(senderAddress);
 
     // recvsg/recvfrom retorna uma (1) mensagem por call, e será a mensagem inteira, desde que o buffer dado tenha
     // tamanho suficiente https://stackoverflow.com/a/2547598 https://linux.die.net/man/2/recvfrom
-    // Além disso, MSG_WAITALL especifica que a thread vai bloquear até que a mensagem seja dada
-    ssize_t bytesLidos =
-        recvfrom(this->pSockFd, buffer, sizeof(buffer), 0, (struct sockaddr*)&clientAddress, &clientAddressLen);
+    ssize_t bytesRead =
+        recvfrom(this->pSockFd, buffer, sizeof(buffer), 0, (struct sockaddr*)&senderAddress, &senderAddressLen);
 
-    printf("Datagrama lido - %ld bytes\n", bytesLidos);
+    if (bytesRead < 0)
+    {
+        fprintf(stderr, "Erro ao ler datagrama: %s (errno: %d)\n", strerror(errno), errno);
+        close(this->pSockFd);
+        abort();
+    }
+
+    printf("Datagrama lido - %ld bytes\n", bytesRead);
 
     PeerConnection* client = new PeerConnection();
     client->SocketFd = this->pSockFd;
-    client->PeerEndpoint = clientAddress;
+    client->PeerEndpoint = senderAddress;
 
     return client;
 }
