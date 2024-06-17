@@ -31,8 +31,9 @@ void rr_server_close(rr_server_handle serverHandle);
 
 rr_sock_handle rr_connect(std::string address, unsigned short port);
 
-void rr_send(rr_sock_handle handle);
-size_t rr_receive(rr_sock_handle handle);
+void rr_send(rr_sock_handle handle, const char* buffer, int bufferSize);
+
+size_t rr_receive(rr_sock_handle handle, char* buffer, int bufferSize);
 
 /*
 

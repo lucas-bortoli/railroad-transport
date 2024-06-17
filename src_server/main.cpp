@@ -4,7 +4,7 @@
 
 int main(int argc, char** argv)
 {
-    printf("main: Starting server\n");
+    printf("main: Iniciando servidor\n");
 
     rr_server_handle server = rr_server_bind("127.0.0.1", 9999);
 
@@ -13,7 +13,7 @@ int main(int argc, char** argv)
         rr_sock_handle client = rr_server_accept_client(server);
     }
 
-    server.Close();
+    rr_server_close(server);
 
     return 0;
 }

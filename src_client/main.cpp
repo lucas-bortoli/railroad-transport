@@ -2,19 +2,17 @@
 #include <cstdio>
 #include <string>
 
-//
-#include <arpa/inet.h>
-#include <string.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
 int main(int argc, char** argv)
 {
+    rr_sock_handle socket = rr_connect("127.0.0.1", 9999);
+
+    std::string packet = "Hello Man";
+
+    rr_send(socket, packet.c_str(), packet.size());
+
     Client client("127.0.0.1", 7426);
 
     client.Connect();
-
-    std::string packet = "Hello Man";
 
     client.Send(packet.c_str(), packet.size());
     printf("Hello World!\n");

@@ -1,17 +1,21 @@
 #include "transport.h"
 #include "utils.h"
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <deque>
 #include <mutex>
 #include <string>
+#include <unistd.h>
+#include <vector>
 
 struct RRServer
 {
+    int fd;
     sockaddr_in serverAddress;
     std::thread* loopThread;
-    std::unique_lock<std::mutex>* rxLock;
-    std::unique_lock<std::mutex>* txLock;
+    std::mutex* rxLock;
+    std::mutex* txLock;
     std::deque<Frame>* rx;
     std::deque<Frame>* tx;
 };
@@ -19,11 +23,35 @@ struct RRServer
 std::atomic<unsigned long> idAllocator{0};
 std::unordered_map<rr_server_handle, RRServer> serverHandles;
 
+// Itera sobre a fila dada, removendo os elementos cuja função de teste retornar true
+std::vector<Frame> queue_filter_truthy(std::deque<Frame>* queue, bool filter(Frame& frame))
+{
+    std::vector<Frame> removed;
+
+    // Verificar se algum item da fila de recepção corresponde ao datagrama enviado
+    for (auto it = queue->begin(); it != queue->end();)
+    {
+        Frame& item = (*it);
+
+        if (filter(item))
+        {
+            removed.push_back(item);
+            queue->erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+
+    return removed;
+}
+
 void rr_server_thread_loop(rr_server_handle serverHandle)
 {
     using namespace std::chrono_literals;
 
-    printf("rr_server_thread_loop(%ld): started\n", serverHandle);
+    printf("rr_server_thread_loop(%ld): thread iniciada\n", serverHandle);
 
     while (true)
     {
@@ -75,22 +103,65 @@ rr_server_handle rr_server_bind(std::string listenAddress, unsigned short listen
     rr_server_handle handle = idAllocator++;
 
     serverHandles[handle] = RRServer{
+        .fd = socketFd,
         .serverAddress = serverAddress,
         .loopThread = new std::thread(&rr_server_thread_loop, handle),
-        .rxLock = new std::unique_lock<std::mutex>(),
-        .txLock = new std::unique_lock<std::mutex>(),
+        .rxLock = new std::mutex(),
+        .txLock = new std::mutex(),
         .rx = new std::deque<Frame>(),
         .tx = new std::deque<Frame>(),
     };
+
+    // Deixar thread executando após essa função retornar
+    serverHandles[handle].loopThread->detach();
+
+    return handle;
 }
 
 rr_sock_handle rr_server_accept_client(rr_server_handle serverHandle)
 {
+    printf("rr_server_accept_client: Aguardando pacote de SYN...\n");
+
+    // Aguardar mensagem de SYN na fila
+    // Criar registro para o cliente
+    // Enviar datagrama de ACK
+
+    while (true)
+    {
+        RRServer& server = serverHandles[serverHandle];
+
+        using namespace std::chrono_literals;
+
+        server.rxLock->lock();
+        auto newSynPackets = queue_filter_truthy(server.rx, [](Frame& frame) {
+            if (frame.Flags.Syn)
+            {
+                return true;
+            }
+
+            return false;
+        });
+        server.rxLock->unlock();
+
+        if (newSynPackets.size() > 0)
+        {
+            // Nova conexão; registrar novos clientes
+            for (auto& packet : newSynPackets)
+            {
+                printf("rr_server_accept_client: novo client\n");
+            }
+            break;
+        }
+
+        std::this_thread::sleep_for(1ms);
+    }
+
+    return idAllocator++;
 }
 
 void rr_server_close(rr_server_handle serverHandle)
 {
-    if (!serverHandles.contains(serverHandle))
+    if (!serverHandles.count(serverHandle))
     {
         // avisar, mas não tomar nenhuma ação
         fprintf(stderr, "rr_server_close: chamado mas não havia um servidor aberto com o handle %ld\n", serverHandle);
@@ -106,12 +177,18 @@ void rr_server_close(rr_server_handle serverHandle)
     serverHandles.erase(serverHandle);
 }
 
+// Bloqueia até a conexão ser aceita
 rr_sock_handle rr_connect(std::string address, unsigned short port)
 {
+    printf("rr_connect: Conectando ao servidor %s com porta %d\n", address.c_str(), port);
+
+    return idAllocator++;
 }
 
-void rr_send(rr_sock_handle handle, char* buffer, int bufferSize)
+void rr_send(rr_sock_handle handle, const char* buffer, int bufferSize)
 {
+    printf("rr_send: Enviando %d bytes\n", bufferSize);
+
     Frame frame = {
         .SequenceId = 0,
         .Flags = {.Syn = false, .Ack = true, .Reserved = 0},
@@ -125,7 +202,7 @@ void rr_send(rr_sock_handle handle, char* buffer, int bufferSize)
     RRServer& server = serverHandles[handle];
     server.txLock->lock();
     server.tx->push_front(frame);
-    server.txLock->release();
+    server.txLock->unlock();
 
     // aguardar ACK
     while (true)
@@ -140,12 +217,15 @@ void rr_send(rr_sock_handle handle, char* buffer, int bufferSize)
             Frame& item = (*it);
         }
 
-        server.rxLock->release();
+        server.rxLock->unlock();
 
         std::this_thread::sleep_for(1ms);
     }
 }
 
-size_t rr_receive(rr_sock_handle handle)
+size_t rr_receive(rr_sock_handle handle, char* buffer, int bufferSize)
 {
+    size_t bytesToRead = std::min(bufferSize, FRAME_BODY_LENGTH);
+
+    return 0;
 }
