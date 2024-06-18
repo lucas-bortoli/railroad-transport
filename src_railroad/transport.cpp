@@ -9,6 +9,19 @@
 #include <unistd.h>
 #include <vector>
 
+struct RRServerClient
+{
+    rr_sock_handle Socket;
+    sockaddr_in Address;
+    unsigned long Sequence;
+};
+
+struct ClientFrame
+{
+    rr_sock_handle Socket;
+    Frame Frame;
+};
+
 struct RRServer
 {
     int fd;
@@ -16,24 +29,26 @@ struct RRServer
     std::thread* loopThread;
     std::mutex* rxLock;
     std::mutex* txLock;
-    std::deque<Frame>* rx;
-    std::deque<Frame>* tx;
+    std::deque<ClientFrame>* rx;
+    std::deque<ClientFrame>* tx;
 };
 
 std::atomic<unsigned long> idAllocator{0};
 std::unordered_map<rr_server_handle, RRServer> serverHandles;
 
 // Itera sobre a fila dada, removendo os elementos cuja função de teste retornar true
-std::vector<Frame> queue_filter_truthy(std::deque<Frame>* queue, bool filter(Frame& frame))
+std::vector<ClientFrame> queue_filter_truthy(std::deque<ClientFrame>* queue,
+                                             bool filter(ClientFrame& frame, bool* stop))
 {
-    std::vector<Frame> removed;
+    std::vector<ClientFrame> removed;
+    bool stop = false;
 
     // Verificar se algum item da fila de recepção corresponde ao datagrama enviado
     for (auto it = queue->begin(); it != queue->end();)
     {
-        Frame& item = (*it);
+        ClientFrame& item = (*it);
 
-        if (filter(item))
+        if (filter(item, &stop))
         {
             removed.push_back(item);
             queue->erase(it);
@@ -42,6 +57,9 @@ std::vector<Frame> queue_filter_truthy(std::deque<Frame>* queue, bool filter(Fra
         {
             ++it;
         }
+
+        if (stop)
+            break;
     }
 
     return removed;
@@ -51,7 +69,7 @@ void rr_server_thread_loop(rr_server_handle serverHandle)
 {
     using namespace std::chrono_literals;
 
-    printf("rr_server_thread_loop(%ld): thread iniciada\n", serverHandle);
+    printf("rr_server_thread_loop(%ld): Thread iniciada\n", serverHandle);
 
     while (true)
     {
@@ -108,8 +126,8 @@ rr_server_handle rr_server_bind(std::string listenAddress, unsigned short listen
         .loopThread = new std::thread(&rr_server_thread_loop, handle),
         .rxLock = new std::mutex(),
         .txLock = new std::mutex(),
-        .rx = new std::deque<Frame>(),
-        .tx = new std::deque<Frame>(),
+        .rx = new std::deque<ClientFrame>(),
+        .tx = new std::deque<ClientFrame>(),
     };
 
     // Deixar thread executando após essa função retornar
@@ -132,13 +150,14 @@ rr_sock_handle rr_server_accept_client(rr_server_handle serverHandle)
 
         using namespace std::chrono_literals;
 
+        // Retornar o primeiro pacote SYN da fila de recepção
         server.rxLock->lock();
-        auto newSynPackets = queue_filter_truthy(server.rx, [](Frame& frame) {
-            if (frame.Flags.Syn)
+        auto newSynPackets = queue_filter_truthy(server.rx, [](ClientFrame& frame, bool* stop) {
+            if (frame.Socket == -1 && frame.Frame.Flags.Syn)
             {
+                (*stop) = true;
                 return true;
             }
-
             return false;
         });
         server.rxLock->unlock();
@@ -146,10 +165,10 @@ rr_sock_handle rr_server_accept_client(rr_server_handle serverHandle)
         if (newSynPackets.size() > 0)
         {
             // Nova conexão; registrar novos clientes
-            for (auto& packet : newSynPackets)
-            {
-                printf("rr_server_accept_client: novo client\n");
-            }
+            auto& packet = newSynPackets.front();
+
+            printf("rr_server_accept_client: Novo cliente\n");
+
             break;
         }
 
@@ -164,7 +183,9 @@ void rr_server_close(rr_server_handle serverHandle)
     if (!serverHandles.count(serverHandle))
     {
         // avisar, mas não tomar nenhuma ação
-        fprintf(stderr, "rr_server_close: chamado mas não havia um servidor aberto com o handle %ld\n", serverHandle);
+        fprintf(stderr,
+                "rr_server_close: chamado mas não havia um servidor aberto com o handle %ld\n",
+                serverHandle);
         return;
     }
 
@@ -201,7 +222,7 @@ void rr_send(rr_sock_handle handle, const char* buffer, int bufferSize)
 
     RRServer& server = serverHandles[handle];
     server.txLock->lock();
-    server.tx->push_front(frame);
+    server.tx->push_front(ClientFrame{.Socket = handle, .Frame = frame});
     server.txLock->unlock();
 
     // aguardar ACK
@@ -214,7 +235,7 @@ void rr_send(rr_sock_handle handle, const char* buffer, int bufferSize)
         // Verificar se algum item da fila de recepção corresponde ao datagrama enviado
         for (auto it = server.rx->begin(); it != server.rx->end();)
         {
-            Frame& item = (*it);
+            // Frame& item = (*it);
         }
 
         server.rxLock->unlock();
