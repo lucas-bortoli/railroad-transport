@@ -27,13 +27,14 @@ typedef unsigned long rr_sock_handle;
 
 rr_server_handle rr_server_bind(std::string address, unsigned short port);
 rr_sock_handle rr_server_accept_client(rr_server_handle serverHandle);
+void rr_server_send(rr_sock_handle handle, const char* buffer, int bufferSize);
+size_t rr_server_receive(rr_sock_handle handle, char* buffer, int bufferSize);
 void rr_server_close(rr_server_handle serverHandle);
 
-rr_sock_handle rr_connect(std::string address, unsigned short port);
-
-void rr_send(rr_sock_handle handle, const char* buffer, int bufferSize);
-
-size_t rr_receive(rr_sock_handle handle, char* buffer, int bufferSize);
+rr_sock_handle rr_client_connect(std::string address, unsigned short port);
+void rr_client_send(rr_sock_handle handle, const char* buffer, int bufferSize);
+size_t rr_client_receive(rr_sock_handle handle, char* buffer, int bufferSize);
+void rr_client_close(rr_sock_handle handle);
 
 /*
 

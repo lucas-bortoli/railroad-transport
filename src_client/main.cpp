@@ -4,18 +4,20 @@
 
 int main(int argc, char** argv)
 {
-    rr_sock_handle socket = rr_connect("127.0.0.1", 9999);
+    rr_sock_handle socket = rr_client_connect("127.0.0.1", 9999);
 
     std::string packet = "Hello Man";
 
-    rr_send(socket, packet.c_str(), packet.size());
+    while (true)
+    {
+        using namespace std::chrono_literals;
 
-    Client client("127.0.0.1", 7426);
+        rr_client_send(socket, packet.c_str(), packet.size());
 
-    client.Connect();
+        std::this_thread::sleep_for(5ms);
+    }
 
-    client.Send(packet.c_str(), packet.size());
-    printf("Hello World!\n");
+    rr_client_close(socket);
 
     /*
     const char* serverIp = "127.0.0.1";     // Server IP address
@@ -44,7 +46,8 @@ int main(int argc, char** argv)
     }
 
     // Send the message to the server
-    if (sendto(sockfd, message, strlen(message), 0, (const struct sockaddr*)&servaddr, sizeof(servaddr)) < 0)
+    if (sendto(sockfd, message, strlen(message), 0, (const struct sockaddr*)&servaddr,
+    sizeof(servaddr)) < 0)
     {
         perror("sendto failed");
         close(sockfd);
