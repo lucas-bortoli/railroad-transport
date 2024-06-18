@@ -20,7 +20,7 @@ template <typename T> struct SentDatagram
 
 template <typename T> std::optional<ReceivedDatagram<T>> rr_datagram_receive(int fd)
 {
-    printf("rr_datagram_receive: Aguardando datagrama...\n");
+    // printf("rr_datagram_receive: Aguardando datagrama...\n");
 
     // Buffer para armazenar mensagem iminente
     T receivedBody;
@@ -33,10 +33,9 @@ template <typename T> std::optional<ReceivedDatagram<T>> rr_datagram_receive(int
     ssize_t bytesRead = recvfrom(fd, (void*)&receivedBody, sizeof(receivedBody), 0,
                                  (struct sockaddr*)&senderAddress, &senderAddrLen);
 
-    printf("rr_datagram_receive: Datagrama recebido\n");
-
     if (bytesRead >= 0)
     {
+        //   printf("rr_datagram_receive: Datagrama recebido\n");
         return ReceivedDatagram<T>{
             .SourceAddress = senderAddress,
             .Body = receivedBody,
@@ -48,9 +47,9 @@ template <typename T> std::optional<ReceivedDatagram<T>> rr_datagram_receive(int
     }
 }
 
-template <typename T> void rr_datagram_send(int fd, SentDatagram<T>& datagram)
+template <typename T> void rr_datagram_send(int fd, const SentDatagram<T>& datagram)
 {
-    printf("rr_datagram_send: Enviando datagrama de %ld bytes...\n", sizeof(datagram.Body));
+    //   printf("rr_datagram_send: Enviando datagrama de %ld bytes...\n", sizeof(datagram.Body));
 
     sendto(fd, &datagram.Body, sizeof(datagram.Body), 0, (sockaddr*)&datagram.TargetAddress,
            sizeof(datagram.TargetAddress));

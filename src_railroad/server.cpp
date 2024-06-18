@@ -14,14 +14,14 @@
 
 struct RRServerClient
 {
-    rr_sock_handle Socket;
     sockaddr_in Address;
+    rr_sock_handle RRHandle;
     unsigned long Sequence;
 };
 
 struct ClientFrame
 {
-    rr_sock_handle Socket;
+    sockaddr_in ClientAddress;
     Frame FrameContent;
 };
 
@@ -41,42 +41,14 @@ struct RRServer
 static std::atomic<unsigned long> idAllocator{0};
 static std::unordered_map<rr_server_handle, RRServer> serverHandles;
 
-// Itera sobre a fila dada, removendo os elementos cuja função de teste retornar true
-std::vector<ClientFrame> queue_filter_truthy(std::deque<ClientFrame>* queue,
-                                             bool filter(ClientFrame& frame, bool* stop))
-{
-    std::vector<ClientFrame> removed;
-    bool stop = false;
-
-    // Verificar se algum item da fila de recepção corresponde ao datagrama enviado
-    for (auto it = queue->begin(); it != queue->end();)
-    {
-        ClientFrame& item = (*it);
-
-        if (filter(item, &stop))
-        {
-            removed.push_back(item);
-            queue->erase(it);
-        }
-        else
-        {
-            ++it;
-        }
-
-        if (stop)
-            break;
-    }
-
-    return removed;
-}
-
-std::optional<ClientFrame> queue_take_first(std::deque<ClientFrame>* queue,
-                                            const std::function<bool(ClientFrame frame)>& filter)
+template <typename T>
+static std::optional<T> queue_take_first(std::deque<T>* queue,
+                                         const std::function<bool(T item)>& filter)
 {
     // Verificar se algum item da fila de recepção corresponde ao datagrama enviado
     for (auto it = queue->begin(); it != queue->end();)
     {
-        ClientFrame& item = (*it);
+        T& item = (*it);
 
         if (filter(item))
         {
@@ -86,6 +58,44 @@ std::optional<ClientFrame> queue_take_first(std::deque<ClientFrame>* queue,
         else
         {
             ++it;
+        }
+    }
+
+    return std::nullopt;
+}
+
+static std::optional<RRServerClient> get_client_from_client_handle(rr_server_handle serverHandle,
+                                                                   rr_sock_handle clientHandle)
+{
+    if (!serverHandles.count(serverHandle))
+        return std::nullopt;
+
+    RRServer server = serverHandles.at(serverHandle);
+
+    for (auto& [clientAddress, clientInfo] : *server.clients)
+    {
+        if (clientInfo.RRHandle == clientHandle)
+        {
+            return clientInfo;
+        }
+    }
+
+    return std::nullopt;
+}
+
+std::optional<RRServerClient> get_client_from_client_address(rr_server_handle serverHandle,
+                                                             sockaddr_in clientAddress)
+{
+    if (!serverHandles.count(serverHandle))
+        return std::nullopt;
+
+    RRServer server = serverHandles.at(serverHandle);
+
+    for (auto& [_, clientInfo] : *server.clients)
+    {
+        if (socketAddressEqual(clientInfo.Address, clientAddress))
+        {
+            return clientInfo;
         }
     }
 
@@ -114,18 +124,20 @@ void rr_server_thread_loop(rr_server_handle serverHandle)
             ClientFrame message = server.tx->front();
 
             server.clientsLock->lock();
-
-            if (server.clients->count(message.Socket))
+            auto clientOrNull = get_client_from_client_address(serverHandle, message.ClientAddress);
+            if (clientOrNull.has_value())
             {
-                RRServerClient& client = server.clients->at(message.Socket);
+                RRServerClient& client = clientOrNull.value();
 
                 // Loop de (re)envio de datagrama com a mensagem
                 while (true)
                 {
                     printf("rr_server_thread_loop: Enviando packet para socket %ld\n",
-                           client.Socket);
-                    sendto(server.fd, &message, sizeof(message), 0, (sockaddr*)&client.Address,
-                           sizeof(client.Address));
+                           client.RRHandle);
+                    rr_datagram_send(server.fd, SentDatagram<Frame>{
+                                                    .TargetAddress = message.ClientAddress,
+                                                    .Body = message.FrameContent,
+                                                });
 
                     printf("rr_server_thread_loop: Aguardando ACK\n");
                     auto receivedDatagramOrNull = rr_datagram_receive<Frame>(server.fd);
@@ -153,9 +165,6 @@ void rr_server_thread_loop(rr_server_handle serverHandle)
                     else
                     {
                         // Nenhum datagrama recebido durante o timeout; reenviar pacote
-                        fprintf(stderr,
-                                "rr_server_thread_loop: Erro ao ler datagrama: %s (errno: %d)\n",
-                                strerror(errno), errno);
                         continue;
                     }
 
@@ -192,37 +201,35 @@ void rr_server_thread_loop(rr_server_handle serverHandle)
             }
             else
             {
-                // Correlacionar address:port do datagrama com o socket_handle do cliente
-                rr_sock_handle foundSocketHandle = -1;
-
-                for (auto& [socketHandle, searchClient] : *server.clients)
-                {
-                    if (socketAddressEqual(searchClient.Address, receivedFrame.SourceAddress))
-                    {
-                        foundSocketHandle = socketHandle;
-                        break;
-                    }
-                }
-
-                printf("rr_server_thread_loop: Quadro recebido\n");
+                printf("rr_server_thread_loop: Quadro (S=%d,A=%d) recebido, enviando ACK\n",
+                       receivedFrame.Body.Flags.Syn, receivedFrame.Body.Flags.Ack);
                 server.rx->push_back(ClientFrame{
-                    .Socket = foundSocketHandle,
+                    .ClientAddress = receivedFrame.SourceAddress,
                     .FrameContent = receivedFrame.Body,
                 });
+
+                bool synAck = receivedFrame.Body.Flags.Syn;
+
+                // Ao receber alguma coisa, temos que devolver um ACK
+                rr_datagram_send<Frame>(
+                    server.fd, SentDatagram<Frame>{
+                                   .TargetAddress = receivedFrame.SourceAddress,
+                                   .Body =
+                                       {
+                                           .SequenceId = receivedFrame.Body.SequenceId,
+                                           .Flags = {.Syn = synAck, .Ack = true, .Reserved = 0},
+                                           .BodyLength = 0,
+                                           .Body = {0},
+                                       },
+                               });
             }
-        }
-        else
-        {
-            // Nenhum datagrama recebido durante o timeout; reenviar pacote
-            fprintf(stderr, "rr_server_thread_loop: Erro ao ler datagrama: %s (errno: %d)\n",
-                    strerror(errno), errno);
         }
         server.rxLock->unlock();
 
         std::this_thread::sleep_for(1ms);
     }
 
-    printf("rr_server_thread_loop: finalizando");
+    printf("rr_server_thread_loop: Finalizando");
 }
 
 rr_server_handle rr_server_bind(std::string listenAddress, unsigned short listenPort)
@@ -241,7 +248,7 @@ rr_server_handle rr_server_bind(std::string listenAddress, unsigned short listen
     int socketFd = socket(AF_INET, SOCK_DGRAM, 0);
     if (socketFd < 0)
     {
-        fprintf(stderr, "rr_server_bind: erro ao criar o socket: %s\n", strerror(errno));
+        fprintf(stderr, "rr_server_bind: Erro ao criar o socket: %s\n", strerror(errno));
         abort();
     }
 
@@ -277,13 +284,22 @@ rr_server_handle rr_server_bind(std::string listenAddress, unsigned short listen
     };
 
     // Deixar thread executando após essa função retornar
-    serverHandles[handle].loopThread->detach();
+    serverHandles.at(handle).loopThread->detach();
 
     return handle;
 }
 
 rr_sock_handle rr_server_accept_client(rr_server_handle serverHandle)
 {
+    if (!serverHandles.count(serverHandle))
+    {
+        fprintf(stderr,
+                "rr_server_accept_client: Tentou usar uma handle de servidor que não existe "
+                "(%ld)\n",
+                serverHandle);
+        abort();
+    }
+
     printf("rr_server_accept_client: Aguardando nova conexão (quadro SYN)...\n");
 
     // Aguardar mensagem de SYN na fila
@@ -298,43 +314,84 @@ rr_sock_handle rr_server_accept_client(rr_server_handle serverHandle)
 
         // Retornar o primeiro pacote SYN da fila de recepção
         server.rxLock->lock();
-        auto filter = [](ClientFrame frame) { return frame.FrameContent.Flags.Syn; };
-        auto synFrame = queue_take_first(server.rx, filter);
+        server.clientsLock->lock();
+
+        // Retornar quadro SYN de um cliente não registrado ainda
+        auto synFrameOrNull = queue_take_first<ClientFrame>(server.rx, [&server, serverHandle](
+                                                                           ClientFrame frame) {
+            return frame.FrameContent.Flags.Syn &&
+                   !get_client_from_client_address(serverHandle, frame.ClientAddress).has_value();
+        });
+        server.clientsLock->unlock();
         server.rxLock->unlock();
 
-        if (synFrame.has_value())
+        if (synFrameOrNull.has_value())
         {
             // Nova conexão; registrar novos clientes
-            auto packet = synFrame.value();
-            printf("rr_server_accept_client: Novo quadro de SYN!\n");
-            break;
+            auto synFrame = synFrameOrNull.value();
+            printf("rr_server_accept_client: Quadro de SYN na fila, removido\n");
+
+            rr_sock_handle socketHandle = idAllocator++;
+
+            server.clientsLock->lock();
+            server.clients->insert_or_assign(socketHandle, RRServerClient{
+                                                               .Address = synFrame.ClientAddress,
+                                                               .RRHandle = socketHandle,
+                                                               .Sequence = 1,
+                                                           });
+
+            // Nesse ponto, a thread de loop já mandou um SYN/ACK.
+
+            server.clientsLock->unlock();
+
+            return socketHandle;
         }
 
         std::this_thread::sleep_for(1ms);
     }
 
-    return idAllocator++;
+    // Nunca vai acontecer; loop infinito até receber novo cliente
+    return -1;
 }
 
-void rr_server_send(rr_sock_handle handle, const char* buffer, int bufferSize)
+void rr_server_send(rr_server_handle serverHandle, rr_sock_handle clientHandle, const char* buffer,
+                    int bufferSize)
 {
+    if (!serverHandles.count(serverHandle))
+    {
+        fprintf(stderr,
+                "rr_server_send: Tentou usar uma handle de servidor que não existe "
+                "(%ld)\n",
+                serverHandle);
+        abort();
+    }
+
     printf("rr_send: Enviando %d bytes\n", bufferSize);
 
-    size_t bytesToCopy = std::min(bufferSize, FRAME_BODY_LENGTH);
+    unsigned int bytesToCopy = std::min(bufferSize, FRAME_BODY_LENGTH);
 
     Frame frame = {
         .SequenceId = 0,
-        .Flags = {.Syn = false, .Ack = true, .Reserved = 0},
+        .Flags = {.Syn = false, .Ack = false, .Reserved = 0},
         .BodyLength = bytesToCopy,
         .Body = {0},
     };
 
     std::memcpy(&frame.Body, buffer, bytesToCopy);
 
-    RRServer& server = serverHandles[handle];
-    server.txLock->lock();
-    server.tx->push_back(ClientFrame{.Socket = handle, .FrameContent = frame});
-    server.txLock->unlock();
+    RRServer& server = serverHandles[serverHandle];
+    server.clientsLock->lock();
+    auto targetClient = get_client_from_client_handle(serverHandle, clientHandle);
+    if (targetClient.has_value())
+    {
+        server.txLock->lock();
+        server.tx->push_back(ClientFrame{
+            .ClientAddress = targetClient.value().Address,
+            .FrameContent = frame,
+        });
+        server.txLock->unlock();
+    }
+    server.clientsLock->unlock();
 
     // aguardar ACK
     while (true)
@@ -355,32 +412,55 @@ void rr_server_send(rr_sock_handle handle, const char* buffer, int bufferSize)
     }
 }
 
-size_t rr_server_receive(rr_sock_handle handle, char* buffer, int bufferSize)
+size_t rr_server_receive(rr_server_handle serverHandle, rr_sock_handle clientHandle, char* buffer,
+                         int bufferSize)
 {
-    size_t bytesToRead = std::min(bufferSize, FRAME_BODY_LENGTH);
+    if (!serverHandles.count(serverHandle))
+    {
+        fprintf(stderr,
+                "rr_server_send: Tentou usar uma handle de servidor que não existe "
+                "(%ld)\n",
+                serverHandle);
+        abort();
+    }
+
+    RRServer& server = serverHandles[serverHandle];
+
+    printf("rr_server_receive: Aguardando dados...\n");
 
     // Aguardar quadro de dados na fila de recepção
     while (true)
     {
         using namespace std::chrono_literals;
 
-        RRServer& server = serverHandles[handle];
+        RRServer& server = serverHandles.at(serverHandle);
 
-        server.rxLock->lock();
+        server.clientsLock->lock();
+        auto targetClient = get_client_from_client_handle(serverHandle, clientHandle);
+        server.clientsLock->unlock();
+
+        if (!targetClient.has_value())
+        {
+            fprintf(stderr, "rr_server_receive: tentou ler de um cliente que não existe (%ld)\n",
+                    clientHandle);
+            abort();
+        }
+
+        auto targetClientAddress = targetClient.value().Address;
 
         // Retornar a primeira mensagem da fila que corresponde ao socket e não é um ACK/SYN
-        auto filter = [handle](ClientFrame frame) {
-            return frame.Socket == handle && !frame.FrameContent.Flags.Ack &&
-                   !frame.FrameContent.Flags.Syn;
-        };
-
-        auto receivedFrame = queue_take_first(server.rx, filter);
-
+        server.rxLock->lock();
+        auto receivedFrame =
+            queue_take_first<ClientFrame>(server.rx, [targetClientAddress](ClientFrame frame) {
+                return socketAddressEqual(frame.ClientAddress, targetClientAddress) &&
+                       !frame.FrameContent.Flags.Ack && !frame.FrameContent.Flags.Syn;
+            });
         server.rxLock->unlock();
 
         if (receivedFrame.has_value())
         {
-            // Encontramos o pacote correspondente; escrever no buffer
+            // Encontramos o pacote correspondente; escrever no buffer de destino
+            size_t bytesToRead = std::min(bufferSize, FRAME_BODY_LENGTH);
             std::memcpy(buffer, receivedFrame.value().FrameContent.Body, bytesToRead);
             return bytesToRead;
         }
@@ -402,7 +482,7 @@ void rr_server_close(rr_server_handle serverHandle)
         return;
     }
 
-    RRServer& server = serverHandles[serverHandle];
+    RRServer& server = serverHandles.at(serverHandle);
     delete server.loopThread;
     delete server.rxLock;
     delete server.txLock;

@@ -6,12 +6,13 @@ int main(int argc, char** argv)
 {
     rr_sock_handle socket = rr_client_connect("127.0.0.1", 9999);
 
-    std::string packet = "Hello Man";
+    printf("main: Conexão estabelecida!\n");
 
     while (true)
     {
         using namespace std::chrono_literals;
 
+        std::string packet = "Hello Man";
         rr_client_send(socket, packet.c_str(), packet.size());
 
         std::this_thread::sleep_for(5ms);
