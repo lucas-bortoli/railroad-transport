@@ -1,70 +1,101 @@
 #pragma once
 #include <cstdint>
 #include <netinet/in.h>
+#include <queue>
 #include <string>
+#include <thread>
+#include <unordered_map>
 #include <vector>
 
-#define DATAFRAME_BODY_LENGTH 256
+#define FRAME_BODY_LENGTH 256
 
-enum class FrameId : uint8_t
+enum class FrameKind : uint8_t
 {
-    SIGNAL,
-    DATA
+    Syn,
+    Ack,
+    Data,
 };
 
-struct __attribute__((packed)) FrameSignal
+struct __attribute__((packed)) Frame
 {
-    FrameId Id;
-};
-
-struct __attribute__((packed)) FrameData
-{
-    FrameId Id;
+    FrameKind Kind;
+    unsigned long SequenceId;
     unsigned int BodyLength;
-    unsigned char Body[DATAFRAME_BODY_LENGTH];
+    unsigned char Body[FRAME_BODY_LENGTH];
 };
 
-class PeerConnection
-{
-  protected:
-    std::vector<struct FrameData> ReceiveQueue;
-    unsigned long long CurrentSequence;
+typedef unsigned long rr_server_handle;
+typedef unsigned long rr_sock_handle;
 
-    void _WaitForMessageMatchingFilter();
+rr_server_handle rr_server_bind(std::string address, unsigned short port);
+rr_sock_handle rr_server_accept_client(rr_server_handle serverHandle);
+void rr_server_send(rr_server_handle serverHandle, rr_sock_handle clientHandle, const char* buffer, int bufferSize);
+size_t rr_server_receive(rr_server_handle serverHandle, rr_sock_handle clientHandle, char* buffer, int bufferSize);
+void rr_server_close(rr_server_handle serverHandle);
+
+rr_sock_handle rr_client_connect(std::string address, unsigned short port);
+void rr_client_send(rr_sock_handle handle, const char* buffer, int bufferSize);
+size_t rr_client_receive(rr_sock_handle handle, char* buffer, int bufferSize);
+void rr_client_close(rr_sock_handle handle);
+
+/*
+
+class ServerClient
+{
+  private:
+    unsigned long long CurrentSequence;
+    // Função da thread desse cliente
+    void Update();
 
   public:
-    struct sockaddr_in PeerEndpoint;
+    std::mutex SendQueueLock;
+    std::mutex ReceiveQueueLock;
+    std::unordered_map<unsigned long long, Frame> SendQueue;
+    std::unordered_map<unsigned long long, Frame> ReceiveQueue;
+
+    struct sockaddr_in ClientAddress;
     int SocketFd;
 
-    PeerConnection();
-    void Send(const char* buffer, size_t buffer_length);
-    size_t Receive(char* buffer);
+    ServerClient(int socketFd, struct sockaddr_in clientAddress);
+
+    // Envia um quadro para o cliente, aguardando um ACK e retransmitindo em tempo hábil
+    void Send(const Frame* frame);
+
+    // Retorna um quadro de dados da fila interna
+    bool Receive(Frame* frameOutput);
+
+    std::thread UpdateThread;
 };
 
 class Server
 {
   private:
-    std::string ListenAddress;
-    unsigned short ListenPort;
-
-    // Uma handle para o socket criado no método Bind(), inicialmente -1
+    // Uma handle para o socket criado no método Bind()
     int pSockFd;
+    std::unordered_map<std::string, ServerClient*> Clients;
 
   public:
-    Server(std::string listenAddress, unsigned short listenPort);
-
     // Cria um socket escutando no endereço e porta dado usando a API POSIX
-    void Bind();
-
+    void Bind(std::string listenAddress, unsigned short listenPort);
+    void Update();
     void Close();
-
-    // Bloquear thread até receber um cliente, fazer um handshake funcional com o mesmo, estabelecendo a conexão
-    PeerConnection* Accept();
 };
 
-class Client : public PeerConnection
+class Client
 {
+  private:
+    // Uma handle para o socket criado
+    int pSockFd;
+    struct sockaddr_in ServerAddress;
+    unsigned long long CurrentSequence;
+    void _WaitForMessageMatchingFilter();
+
   public:
-    Client(std::string peerAddress, unsigned short peerPort);
-    void Connect();
-};
+    void Connect(std::string listenAddress, unsigned short listenPort);
+
+    // Envia um quadro para o cliente, aguardando um ACK e retransmitindo em tempo hábil
+    void Send(const Frame* frame);
+
+    // Retorna um quadro de dados da fila interna
+    bool Receive(Frame* frameOutput);
+};*/
