@@ -11,6 +11,10 @@
 #include <string>
 #include <unistd.h>
 
+#ifdef RR_SIMULATE_PACKET_LOSS_CHANCE
+#include <stdlib.h> // rand()
+#endif RR_SIMULATE_PACKET_LOSS_CHANCE
+
 struct RRServerClient
 {
     // Identificador desse cliente na biblioteca
@@ -110,6 +114,12 @@ void rr_server_thread_loop(rr_server_handle serverHandle)
         while (true)
         {
             auto datagramOrNull = rr_datagram_receive<Frame>(server.fd);
+
+#ifdef RR_SIMULATE_PACKET_LOSS_CHANCE
+            // simular packet loss ("RR_SIMULATE_PACKET_LOSS_CHANCE" % de chance de perder pacote)
+            if ((rand() % 100) < RR_SIMULATE_PACKET_LOSS_CHANCE)
+                continue;
+#endif
 
             // Não há mais datagramas a receber
             if (!datagramOrNull.has_value())

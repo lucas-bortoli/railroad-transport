@@ -8,6 +8,10 @@
 #include <thread>
 #include <unistd.h>
 
+#ifdef RR_SIMULATE_PACKET_LOSS_CHANCE
+#include <stdlib.h> // rand()
+#endif RR_SIMULATE_PACKET_LOSS_CHANCE
+
 struct RRClient
 {
     int fd;
@@ -74,6 +78,12 @@ void rr_client_thread_loop(rr_sock_handle handle)
         {
             auto datagramOrNull = rr_datagram_receive<Frame>(client.fd);
 
+#ifdef RR_SIMULATE_PACKET_LOSS_CHANCE
+            // simular packet loss ("RR_SIMULATE_PACKET_LOSS_CHANCE" % de chance de perder pacote)
+            if ((rand() % 100) < RR_SIMULATE_PACKET_LOSS_CHANCE)
+                continue;
+#endif
+
             // Não há mais datagramas a receber
             if (!datagramOrNull.has_value())
                 break;
@@ -101,12 +111,12 @@ void rr_client_thread_loop(rr_sock_handle handle)
                 case FrameKind::Data: {
                     if (datagram.Body.SequenceId < client.sequenceRx)
                     {
-                        printf("rr_server_thread_loop: Pacote DATA (sequence %lu / %lu, descartado)\n",
+                        printf("rr_client_thread_loop: Pacote DATA (sequence %lu / %lu, descartado)\n",
                                datagram.Body.SequenceId, client.sequenceRx);
                     }
                     else
                     {
-                        printf("rr_server_thread_loop: Pacote DATA (sequence %lu / %lu, aceito)\n",
+                        printf("rr_client_thread_loop: Pacote DATA (sequence %lu / %lu, aceito)\n",
                                datagram.Body.SequenceId, client.sequenceRx);
                         client.rxLock->lock();
                         client.rx->push_back(datagram.Body);
