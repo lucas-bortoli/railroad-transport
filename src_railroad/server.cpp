@@ -93,6 +93,14 @@ RRServerClient* get_client_from_client_address(rr_server_handle serverHandle, so
     return nullptr;
 }
 
+void rr_invalidate_client(RRServerClient& client)
+{
+    delete client.rx;
+    delete client.rxLock;
+    delete client.tx;
+    delete client.txLock;
+}
+
 void rr_server_thread_loop(rr_server_handle serverHandle)
 {
     using namespace std::chrono_literals;
@@ -349,7 +357,6 @@ rr_sock_handle rr_server_accept_client(rr_server_handle serverHandle)
             server.clientsLock->unlock();
 
             server.pendingSyn->pop();
-
             server.pendingSynLock->unlock();
 
             return socketHandle;
@@ -467,6 +474,32 @@ size_t rr_server_receive(rr_server_handle serverHandle, rr_sock_handle clientHan
     return -1;
 }
 
+// Termina a conexão com um cliente específico
+void rr_server_close_client(rr_server_handle serverHandle, rr_sock_handle clientHandle)
+{
+    if (!serverHandles.count(serverHandle))
+    {
+        // avisar, mas não tomar nenhuma ação
+        fprintf(stderr, "rr_server_close_client: chamado mas não havia um servidor aberto com o handle %lu\n",
+                serverHandle);
+        return;
+    }
+
+    RRServer& server = serverHandles.at(serverHandle);
+
+    std::lock_guard clientsLock(*server.clientsLock);
+    if (server.clients->count(clientHandle))
+    {
+        fprintf(stderr, "rr_server_close_client: cliente dado (%lu) não existe\n", clientHandle);
+        return;
+    }
+
+    RRServerClient& client = server.clients->at(clientHandle);
+
+    rr_invalidate_client(client);
+    server.clients->erase(client.handle);
+}
+
 void rr_server_close(rr_server_handle serverHandle)
 {
     if (!serverHandles.count(serverHandle))
@@ -477,6 +510,11 @@ void rr_server_close(rr_server_handle serverHandle)
     }
 
     RRServer& server = serverHandles.at(serverHandle);
+
+    server.clientsLock->lock();
+    for (auto& [_, client] : *server.clients)
+        rr_invalidate_client(client);
+    server.clientsLock->unlock();
 
     delete server.ioThread;
     delete server.clientsLock;
