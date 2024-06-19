@@ -13,3 +13,7 @@ std::string ConvertAddressToIPv4String(const struct sockaddr_in& addr);
 
 // Comparar igualidade de dois endereços
 bool socketAddressEqual(const sockaddr_in& addr1, const sockaddr_in& addr2);
+
+// Retorna o tempo atual em milissegundos desde 1970-01-01.
+// https://stackoverflow.com/a/44896326
+unsigned long long timeInMilliseconds();

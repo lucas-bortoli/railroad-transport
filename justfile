@@ -1,6 +1,6 @@
 [linux]
 build_client:
-  clang++ -g -Wall -o main_client -I src_railroad src_railroad/*.cpp src_client/*.cpp
+  g++ -g -Wall -o main_client -I src_railroad src_railroad/*.cpp src_client/*.cpp
 
 [linux]
 run_client: build_client
@@ -8,7 +8,7 @@ run_client: build_client
 
 [linux]
 build_server:
-  clang++ -g -Wall -o main_server -I src_railroad src_railroad/*.cpp src_server/*.cpp
+  g++ -g -Wall -o main_server -I src_railroad src_railroad/*.cpp src_server/*.cpp
 
 [linux]
 run_server: build_server
@@ -17,7 +17,7 @@ run_server: build_server
 
 [windows]
 build_server:
-  clang++ -g -Wall -o main_server.exe -I src_railroad src_railroad/*.cpp src_server/*.cpp
+  g++ -g -Wall -o main_server.exe -I src_railroad src_railroad/*.cpp src_server/*.cpp
 
 [windows]
 run_server: build_server

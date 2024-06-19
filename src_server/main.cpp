@@ -22,7 +22,10 @@ int main(int argc, char** argv)
             std::memset(buffer, 0, sizeof(buffer));
 
             size_t bytesLidos = rr_server_receive(server, client, buffer, sizeof(buffer));
-            printf("main: %d bytes lidos\n", bytesLidos);
+            printf("main: %zu bytes lidos: %s\n", bytesLidos, buffer);
+
+            std::string packet = "Hello Man From Server";
+            rr_server_send(server, client, packet.c_str(), packet.size());
         }
     }
 

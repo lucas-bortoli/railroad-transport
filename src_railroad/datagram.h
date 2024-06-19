@@ -30,8 +30,8 @@ template <typename T> std::optional<ReceivedDatagram<T>> rr_datagram_receive(int
     socklen_t senderAddrLen = sizeof(senderAddress);
 
     // Ler um quadro da rede
-    ssize_t bytesRead = recvfrom(fd, (void*)&receivedBody, sizeof(receivedBody), 0,
-                                 (struct sockaddr*)&senderAddress, &senderAddrLen);
+    ssize_t bytesRead =
+        recvfrom(fd, (void*)&receivedBody, sizeof(receivedBody), 0, (struct sockaddr*)&senderAddress, &senderAddrLen);
 
     if (bytesRead >= 0)
     {

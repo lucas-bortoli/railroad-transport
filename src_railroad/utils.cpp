@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <optional>
 #include <string>
+#include <sys/time.h>
 
 // Converter uma std::string contendo uma representação textual do IPv4 para um endereço
 in_addr_t ConvertIPv4StringToAddress(const std::string& ipAddress)
@@ -11,8 +12,7 @@ in_addr_t ConvertIPv4StringToAddress(const std::string& ipAddress)
 
     if (inet_pton(AF_INET, ipAddress.c_str(), &addr) != 1)
     {
-        fprintf(stderr, "ConvertIPv4StringToAddress: string passada não é um IPv4 válido: %s\n",
-                ipAddress.c_str());
+        fprintf(stderr, "ConvertIPv4StringToAddress: string passada não é um IPv4 válido: %s\n", ipAddress.c_str());
         abort();
     }
 
@@ -56,4 +56,14 @@ bool socketAddressEqual(const sockaddr_in& addr1, const sockaddr_in& addr2)
     }
 
     return true;
+}
+
+// Retorna o tempo atual em milissegundos desde 1970-01-01.
+// https://stackoverflow.com/a/44896326
+unsigned long long timeInMilliseconds()
+{
+    struct timeval tv;
+
+    gettimeofday(&tv, NULL);
+    return (((unsigned long long)tv.tv_sec) * 1000) + (tv.tv_usec / 1000);
 }

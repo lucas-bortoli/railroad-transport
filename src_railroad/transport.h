@@ -9,15 +9,17 @@
 
 #define FRAME_BODY_LENGTH 256
 
+enum class FrameKind : uint8_t
+{
+    Syn,
+    Ack,
+    Data,
+};
+
 struct __attribute__((packed)) Frame
 {
-    unsigned long long SequenceId;
-    struct
-    {
-        bool Syn : 1;
-        bool Ack : 1;
-        bool Reserved : 6;
-    } Flags;
+    FrameKind Kind;
+    unsigned long SequenceId;
     unsigned int BodyLength;
     unsigned char Body[FRAME_BODY_LENGTH];
 };
@@ -27,10 +29,8 @@ typedef unsigned long rr_sock_handle;
 
 rr_server_handle rr_server_bind(std::string address, unsigned short port);
 rr_sock_handle rr_server_accept_client(rr_server_handle serverHandle);
-void rr_server_send(rr_server_handle serverHandle, rr_sock_handle clientHandle, const char* buffer,
-                    int bufferSize);
-size_t rr_server_receive(rr_server_handle serverHandle, rr_sock_handle clientHandle, char* buffer,
-                         int bufferSize);
+void rr_server_send(rr_server_handle serverHandle, rr_sock_handle clientHandle, const char* buffer, int bufferSize);
+size_t rr_server_receive(rr_server_handle serverHandle, rr_sock_handle clientHandle, char* buffer, int bufferSize);
 void rr_server_close(rr_server_handle serverHandle);
 
 rr_sock_handle rr_client_connect(std::string address, unsigned short port);
