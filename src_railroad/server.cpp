@@ -129,17 +129,17 @@ void rr_server_thread_loop(rr_server_handle serverHandle)
             auto& datagram = datagramOrNull.value();
             switch (datagram.Body.Kind)
             {
-                case FrameKind::Syn:
+                case FrameKind::Syn: {
                     printf("rr_server_thread_loop: Pacote SYN\n");
                     server.pendingSynLock->lock();
                     // TODO: talvez verificar se já tem um SYN na fila para evitar duplicados?
                     server.pendingSyn->push(datagram.SourceAddress);
                     server.pendingSynLock->unlock();
                     break;
+                }
                 case FrameKind::Ack: {
                     // Direcionar ao cliente correto
                     std::lock_guard clientLock(*server.clientsLock);
-
                     auto clientOrNull = get_client_from_client_address(serverHandle, datagram.SourceAddress);
                     if (clientOrNull == nullptr)
                     {
@@ -162,7 +162,6 @@ void rr_server_thread_loop(rr_server_handle serverHandle)
                 case FrameKind::Data: {
                     // Direcionar ao cliente correto
                     std::lock_guard clientLock(*server.clientsLock);
-
                     auto clientOrNull = get_client_from_client_address(serverHandle, datagram.SourceAddress);
                     if (clientOrNull == nullptr)
                     {

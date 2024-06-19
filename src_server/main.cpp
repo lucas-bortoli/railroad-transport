@@ -2,6 +2,25 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
+
+void client_thread(rr_server_handle server, rr_sock_handle socket)
+{
+    while (true)
+    {
+        int i = 0;
+
+        char buffer[FRAME_BODY_LENGTH];
+        std::memset(buffer, 0, sizeof(buffer));
+
+        size_t bytesLidos = rr_server_receive(server, socket, buffer, sizeof(buffer));
+        printf("main: %zu bytes lidos: %s\n", bytesLidos, buffer);
+
+        i++;
+        std::string packet = "Hello Man From Server " + std::to_string(i);
+        rr_server_send(server, socket, packet.c_str(), packet.size());
+    }
+}
 
 int main(int argc, char** argv)
 {
@@ -14,19 +33,9 @@ int main(int argc, char** argv)
         rr_sock_handle client = rr_server_accept_client(server);
 
         printf("main: Novo cliente: %ld\n", client);
-        // do something with client
 
-        while (true)
-        {
-            char buffer[FRAME_BODY_LENGTH];
-            std::memset(buffer, 0, sizeof(buffer));
-
-            size_t bytesLidos = rr_server_receive(server, client, buffer, sizeof(buffer));
-            printf("main: %zu bytes lidos: %s\n", bytesLidos, buffer);
-
-            std::string packet = "Hello Man From Server";
-            rr_server_send(server, client, packet.c_str(), packet.size());
-        }
+        auto t = new std::thread(&client_thread, server, client);
+        t->detach();
     }
 
     rr_server_close(server);

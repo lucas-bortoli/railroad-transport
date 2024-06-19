@@ -9,11 +9,13 @@ int main(int argc, char** argv)
 
     printf("main: Conexão estabelecida!\n");
 
+    int i = 0;
     while (true)
     {
         using namespace std::chrono_literals;
 
-        std::string packet = "Hello Man";
+        i++;
+        std::string packet = "Hello Man " + std::to_string(i);
         rr_client_send(socket, packet.c_str(), packet.size());
 
         char buffer[FRAME_BODY_LENGTH];
@@ -21,8 +23,6 @@ int main(int argc, char** argv)
 
         size_t bytesLidos = rr_client_receive(socket, buffer, sizeof(buffer));
         printf("main: %zu bytes lidos: %s\n", bytesLidos, buffer);
-
-        std::this_thread::sleep_for(5ms);
     }
 
     rr_client_close(socket);
