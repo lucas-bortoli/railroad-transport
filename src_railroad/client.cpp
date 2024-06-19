@@ -10,7 +10,7 @@
 
 #ifdef RR_SIMULATE_PACKET_LOSS_CHANCE
 #include <stdlib.h> // rand()
-#endif RR_SIMULATE_PACKET_LOSS_CHANCE
+#endif
 
 struct RRClient
 {

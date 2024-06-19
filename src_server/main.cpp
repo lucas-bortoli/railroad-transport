@@ -6,10 +6,9 @@
 
 void client_thread(rr_server_handle server, rr_sock_handle socket)
 {
+    int i = 0;
     while (true)
     {
-        int i = 0;
-
         char buffer[FRAME_BODY_LENGTH];
         std::memset(buffer, 0, sizeof(buffer));
 
