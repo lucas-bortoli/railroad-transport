@@ -4,16 +4,28 @@
 #include <algorithm>
 #include <atomic>
 #include <cstring>
-#include <deque>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <sys/time.h>
 #include <unistd.h>
+#include <vector>
 
 #ifdef RR_SIMULATE_PACKET_LOSS_CHANCE
 #include <stdlib.h> // rand()
 #endif
+
+struct PendingFrame
+{
+    // Timestamp em millisegundos do momento de envio desse quadro, usado para calcular timeout dos ACKs e subsequente
+    // reenvio
+    unsigned long long TxTimestamp;
+
+    // O quadro em questão.
+    Frame Inner;
+};
 
 struct RRServerClient
 {
@@ -27,28 +39,24 @@ struct RRServerClient
     // seja menor que esse valor, não deverá ser colocado na fila currentRx, pois entende-se que já
     // foi processado pela aplicação de servidor. No entanto, ainda deve-se responder ACK para o
     // quadro, para impedir a retransmissão do mesmo.
-    unsigned long sequenceRx;
+    unsigned long nextSequenceRx;
 
     // Contador simples de quadros transmitidos com sucesso (aqueles que receberam ACK com
     // respostas). A cada quadro NOVO gerado pelo servidor, esse valor deverá ser incrementado.
     unsigned long sequenceTx;
 
-    // Indica se esse cliente enviou um quadro e ainda não recebeu um ACK.
-    bool statusWaitingForAck;
-
-    // Representa os quadros recebidos. Essa fila contém apenas quadros de FrameKind::Data. Quadros
+    // Representa os quadros recebidos. Esse container contém apenas quadros de FrameKind::Data. Quadros
     // de SYN/ACK são processados independentemente no loop principal de IO.
-    std::deque<Frame>* rx;
+    std::map<unsigned long, Frame>* rx;
     std::mutex* rxLock;
 
     // Representa os quadros de dados a serem transmitidos ainda. Ao receber um ACK, o quadro
-    // recém-enviado é removido da fila.
-    std::deque<Frame>* tx;
+    // recém-enviado é removido do container.
+    std::map<unsigned long, PendingFrame>* tx;
     std::mutex* txLock;
 
-    // Timestamp em millisegundos do momento de envio do último datagrama de transmissão, usado para calcular timeout
-    // dos ACKs e subsequente reenvio
-    unsigned long long lastTxTimestamp;
+    // Tamanho da janela de recepção/envio simultâneo. Deve ser >= 1.
+    unsigned int windowSize;
 };
 
 struct RRServer
@@ -63,7 +71,7 @@ struct RRServer
     // SYN é recebido de um cliente desconhecido, o endereço do remetente é colocado nessa fila. A
     // função rr_server_accept_client deve ler essa fila, transmitir um datagrama ACK, e alocar
     // recursos para um novo RRServerClient.
-    std::queue<sockaddr_in>* pendingSyn;
+    std::deque<sockaddr_in>* pendingSyn;
     std::mutex* pendingSynLock;
 
     // Quanto tempo, em millisegundos, esperar um ACK antes de retransmitir um quadro
@@ -140,8 +148,19 @@ void rr_server_thread_loop(rr_server_handle serverHandle)
                 case FrameKind::Syn: {
                     printf("rr_server_thread_loop: Pacote SYN\n");
                     server.pendingSynLock->lock();
-                    // TODO: talvez verificar se já tem um SYN na fila para evitar duplicados?
-                    server.pendingSyn->push(datagram.SourceAddress);
+                    bool isDuplicate = false;
+                    for (auto previousSyn : *server.pendingSyn)
+                    {
+                        if (socketAddressEqual(previousSyn, datagram.SourceAddress))
+                        {
+                            isDuplicate = true;
+                            break;
+                        }
+                    }
+                    if (!isDuplicate)
+                    {
+                        server.pendingSyn->push_back(datagram.SourceAddress);
+                    }
                     server.pendingSynLock->unlock();
                     break;
                 }
@@ -158,13 +177,10 @@ void rr_server_thread_loop(rr_server_handle serverHandle)
                     printf("rr_server_thread_loop: Pacote ACK\n");
 
                     auto& client = *clientOrNull;
-                    client.statusWaitingForAck = false;
-                    // Ao receber um ACK, remover pacote da fila de transmissão para evitar reenvio
+                    // Ao receber um ACK, remover aquele pacote da fila de transmissão para evitar reenvio
                     client.txLock->lock();
-                    if (!client.tx->empty())
-                        client.tx->pop_front();
+                    client.tx->erase(datagram.Body.SequenceId);
                     client.txLock->unlock();
-
                     break;
                 }
                 case FrameKind::Data: {
@@ -178,21 +194,23 @@ void rr_server_thread_loop(rr_server_handle serverHandle)
                     }
 
                     auto& client = *clientOrNull;
-
-                    if (datagram.Body.SequenceId < client.sequenceRx)
+                    client.rxLock->lock();
+                    if (datagram.Body.SequenceId < client.nextSequenceRx || client.rx->count(datagram.Body.SequenceId))
                     {
-                        printf("rr_server_thread_loop: Pacote DATA (sequence %lu / %lu, descartado)\n",
-                               datagram.Body.SequenceId, client.sequenceRx);
+                        printf("rr_server_thread_loop: Pacote DATA (sequence %lu descartado)\n",
+                               datagram.Body.SequenceId);
                     }
                     else
                     {
-                        printf("rr_server_thread_loop: Pacote DATA (sequence %lu / %lu, aceito)\n",
-                               datagram.Body.SequenceId, client.sequenceRx);
-                        client.rxLock->lock();
-                        client.rx->push_back(datagram.Body);
-                        client.sequenceRx++;
-                        client.rxLock->unlock();
+                        printf("rr_server_thread_loop: Pacote DATA (sequence %lu aceito)\n", datagram.Body.SequenceId);
+
+                        client.rx->insert_or_assign(datagram.Body.SequenceId, datagram.Body);
+                        if (datagram.Body.SequenceId == client.nextSequenceRx + 1)
+                        {
+                            client.nextSequenceRx++;
+                        }
                     }
+                    client.rxLock->unlock();
 
                     // Responder ACK
                     auto ackReply = SentDatagram<Frame>{
@@ -212,27 +230,24 @@ void rr_server_thread_loop(rr_server_handle serverHandle)
         server.clientsLock->lock();
         for (auto& [_, client] : *server.clients)
         {
-            // Transmitir o primeiro pacote da fila de envio:
-            // 1. Não esteja aguardando nenhum ACK
-            // 2. Esperou tempo demais para um ACK e está retransmitindo
-            auto now = timeInMilliseconds();
-            if (!client.statusWaitingForAck ||
-                (client.statusWaitingForAck && now - client.lastTxTimestamp >= server.ackTimeout))
-            {
-                client.txLock->lock();
-                if (!client.tx->empty())
-                {
-                    auto& frame = client.tx->front();
+            // (re?)transmitir os primeiros N pacotes da fila de envio (aqueles que receberam um ACK não estão nessa
+            // fila)
+            client.txLock->lock();
+            auto txCandidates = rr_peek_first_n_items_tx<PendingFrame>(*client.tx, client.windowSize);
 
-                    client.statusWaitingForAck = true;
-                    client.lastTxTimestamp = timeInMilliseconds();
+            for (const auto& sentFrameCopy : txCandidates)
+            {
+                auto now = timeInMilliseconds();
+                if (now - sentFrameCopy.TxTimestamp >= server.ackTimeout)
+                {
+                    client.tx->at(sentFrameCopy.Inner.SequenceId).TxTimestamp = timeInMilliseconds();
                     rr_datagram_send<Frame>(server.fd, SentDatagram<Frame>{
                                                            .TargetAddress = client.address,
-                                                           .Body = frame,
+                                                           .Body = sentFrameCopy.Inner,
                                                        });
                 }
-                client.txLock->unlock();
             }
+            client.txLock->unlock();
         }
         server.clientsLock->unlock();
 
@@ -287,7 +302,7 @@ rr_server_handle rr_server_bind(std::string listenAddress, unsigned short listen
         .ioThread = nullptr,
         .clientsLock = new std::mutex(),
         .clients = new std::unordered_map<rr_sock_handle, RRServerClient>(),
-        .pendingSyn = new std::queue<sockaddr_in>(),
+        .pendingSyn = new std::deque<sockaddr_in>(),
         .pendingSynLock = new std::mutex(),
         .ackTimeout = 500, // timeout de 500 ms
     };
@@ -344,19 +359,18 @@ rr_sock_handle rr_server_accept_client(rr_server_handle serverHandle)
             auto client = RRServerClient{
                 .handle = socketHandle,
                 .address = clientAddress,
-                .sequenceRx = 1,
+                .nextSequenceRx = 2,
                 .sequenceTx = 1,
-                .statusWaitingForAck = false,
-                .rx = new std::deque<Frame>(),
+                .rx = new std::map<unsigned long, Frame>(),
                 .rxLock = new std::mutex(),
-                .tx = new std::deque<Frame>(),
+                .tx = new std::map<unsigned long, PendingFrame>(),
                 .txLock = new std::mutex(),
-                .lastTxTimestamp = 0,
+                .windowSize = 3,
             };
             server.clients->insert_or_assign(socketHandle, client);
             server.clientsLock->unlock();
 
-            server.pendingSyn->pop();
+            server.pendingSyn->pop_front();
             server.pendingSynLock->unlock();
 
             return socketHandle;
@@ -387,43 +401,20 @@ void rr_server_send(rr_server_handle serverHandle, rr_sock_handle clientHandle, 
     RRServerClient& client = server.clients->at(clientHandle);
 
     client.txLock->lock();
-    Frame frame = {
-        .Kind = FrameKind::Data,
-        .SequenceId = client.sequenceTx++,
-        .BodyLength = bytesToCopy,
-        .Body = {0},
+    PendingFrame frame = {
+        // Inicialmente, tempo infinito no passado para garantir primeira transmissão
+        .TxTimestamp = 0,
+        .Inner =
+            Frame{
+                .Kind = FrameKind::Data,
+                .SequenceId = client.sequenceTx++,
+                .BodyLength = bytesToCopy,
+                .Body = {0},
+            },
     };
-    std::memcpy(&frame.Body, buffer, bytesToCopy);
-    client.tx->push_back(frame);
+    std::memcpy(&frame.Inner.Body, buffer, bytesToCopy);
+    client.tx->insert_or_assign(frame.Inner.SequenceId, frame);
     client.txLock->unlock();
-
-    // Aguardar ACK
-    while (true)
-    {
-        using namespace std::chrono_literals;
-
-        client.txLock->lock();
-
-        // Enquanto esse quadro estiver na fila de transmissão, ele não foi recebido ainda
-        bool found = false;
-        for (auto& queuedFrame : *client.tx)
-        {
-            if (queuedFrame.SequenceId == frame.SequenceId)
-            {
-                found = true;
-                break;
-            }
-        }
-        client.txLock->unlock();
-
-        // Quadro saiu da fila de transmissão?
-        if (!found)
-        {
-            return;
-        }
-
-        std::this_thread::sleep_for(1ms);
-    }
 }
 
 size_t rr_server_receive(rr_server_handle serverHandle, rr_sock_handle clientHandle, char* buffer, int bufferSize)
@@ -437,27 +428,31 @@ size_t rr_server_receive(rr_server_handle serverHandle, rr_sock_handle clientHan
         abort();
     }
 
-    printf("rr_server_receive: Aguardando dados...\n");
+    RRServer& server = serverHandles.at(serverHandle);
+
+    server.clientsLock->lock();
+    RRServerClient& client = server.clients->at(clientHandle);
+    unsigned long wantedSeq = client.nextSequenceRx; // <---------- AQUI TA ERRADO! min(server.rx)
+    server.clientsLock->unlock();
 
     // Aguardar quadro de dados na fila de recepção
     while (true)
     {
         using namespace std::chrono_literals;
 
-        RRServer& server = serverHandles.at(serverHandle);
         server.clientsLock->lock();
-        RRServerClient& client = server.clients->at(clientHandle);
+        printf("rr_server_receive: Aguardando quadro #%lu...\n", wantedSeq);
 
         client.rxLock->lock();
-        if (!client.rx->empty())
+        if (client.rx->count(wantedSeq))
         {
-            auto& receivedFrame = client.rx->front();
+            auto& receivedFrame = client.rx->at(wantedSeq);
 
             // Escrever no buffer de destino
             size_t bytesToRead = std::min(std::min(bufferSize, FRAME_BODY_LENGTH), (int)receivedFrame.BodyLength);
             std::memcpy(buffer, receivedFrame.Body, bytesToRead);
 
-            client.rx->pop_front();
+            client.rx->erase(wantedSeq);
 
             client.rxLock->unlock();
             server.clientsLock->unlock();
@@ -467,7 +462,7 @@ size_t rr_server_receive(rr_server_handle serverHandle, rr_sock_handle clientHan
         client.rxLock->unlock();
         server.clientsLock->unlock();
 
-        std::this_thread::sleep_for(1ms);
+        std::this_thread::sleep_for(10ms);
     }
 
     // Nunca vai acontecer (TODO implementar timeout de read)

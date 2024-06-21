@@ -22,6 +22,15 @@ struct __attribute__((packed)) Frame
     unsigned long SequenceId;
     unsigned int BodyLength;
     unsigned char Body[FRAME_BODY_LENGTH];
+
+    // Usado para implementar uma Fila de Prioridade composta por Frames, na metodologia de sliding window.
+    // Dessa forma, podemos usar a comparação Frame A < Frame B, que significa que Frame A vem antes de Frame B no
+    // ordenamento correto de pacotes. A classe std::priority_queue depende desse operador para fazer seu sorting.
+    // https://stackoverflow.com/a/15602044
+    bool operator<(const Frame& rhs) const
+    {
+        return this->SequenceId < rhs.SequenceId;
+    }
 };
 
 typedef unsigned long rr_server_handle;
