@@ -14,8 +14,6 @@ void client_thread(rr_server_handle server, rr_sock_handle socket)
         char buffer[FRAME_BODY_LENGTH];
         std::memset(buffer, 0, sizeof(buffer));
 
-        std::this_thread::sleep_for(1000ms);
-
         size_t bytesLidos = rr_server_receive(server, socket, buffer, sizeof(buffer));
         printf("main: %zu bytes lidos: %s\n", bytesLidos, buffer);
     }

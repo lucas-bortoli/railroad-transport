@@ -30,7 +30,7 @@ int main(int argc, char** argv)
         packet = "Hello Man " + std::to_string(i) + " (batch " + std::to_string(batch) + ")";
         rr_client_send(socket, packet.c_str(), packet.size());
 
-        std::this_thread::sleep_for(50000ms);
+        std::this_thread::sleep_for(1ms);
     }
 
     rr_client_close(socket);

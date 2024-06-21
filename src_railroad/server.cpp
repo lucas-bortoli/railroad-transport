@@ -195,6 +195,7 @@ void rr_server_thread_loop(rr_server_handle serverHandle)
 
                     auto& client = *clientOrNull;
                     client.rxLock->lock();
+                    // É um pacote já processado pela aplicação, ou já está na fila de processamento?
                     if (datagram.Body.SequenceId < client.nextSequenceRx || client.rx->count(datagram.Body.SequenceId))
                     {
                         printf("rr_server_thread_loop: Pacote DATA (sequence %lu descartado)\n",
@@ -205,10 +206,6 @@ void rr_server_thread_loop(rr_server_handle serverHandle)
                         printf("rr_server_thread_loop: Pacote DATA (sequence %lu aceito)\n", datagram.Body.SequenceId);
 
                         client.rx->insert_or_assign(datagram.Body.SequenceId, datagram.Body);
-                        if (datagram.Body.SequenceId == client.nextSequenceRx + 1)
-                        {
-                            client.nextSequenceRx++;
-                        }
                     }
                     client.rxLock->unlock();
 
@@ -365,7 +362,7 @@ rr_sock_handle rr_server_accept_client(rr_server_handle serverHandle)
                 .rxLock = new std::mutex(),
                 .tx = new std::map<unsigned long, PendingFrame>(),
                 .txLock = new std::mutex(),
-                .windowSize = 3,
+                .windowSize = 15,
             };
             server.clients->insert_or_assign(socketHandle, client);
             server.clientsLock->unlock();
@@ -429,11 +426,10 @@ size_t rr_server_receive(rr_server_handle serverHandle, rr_sock_handle clientHan
     }
 
     RRServer& server = serverHandles.at(serverHandle);
-
-    server.clientsLock->lock();
     RRServerClient& client = server.clients->at(clientHandle);
-    unsigned long wantedSeq = client.nextSequenceRx; // <---------- AQUI TA ERRADO! min(server.rx)
-    server.clientsLock->unlock();
+    client.rxLock->lock();
+    unsigned long wantedSeq = client.nextSequenceRx;
+    client.rxLock->unlock();
 
     // Aguardar quadro de dados na fila de recepção
     while (true)
@@ -448,11 +444,15 @@ size_t rr_server_receive(rr_server_handle serverHandle, rr_sock_handle clientHan
         {
             auto& receivedFrame = client.rx->at(wantedSeq);
 
+            printf("rr_server_receive: quadro #%lu recebido\n", receivedFrame.SequenceId);
+
             // Escrever no buffer de destino
             size_t bytesToRead = std::min(std::min(bufferSize, FRAME_BODY_LENGTH), (int)receivedFrame.BodyLength);
             std::memcpy(buffer, receivedFrame.Body, bytesToRead);
 
-            client.rx->erase(wantedSeq);
+            client.nextSequenceRx = receivedFrame.SequenceId + 1;
+            printf("rr_server_receive: próximo quadro será #%lu\n", client.nextSequenceRx);
+            client.rx->erase(receivedFrame.SequenceId);
 
             client.rxLock->unlock();
             server.clientsLock->unlock();
@@ -462,7 +462,7 @@ size_t rr_server_receive(rr_server_handle serverHandle, rr_sock_handle clientHan
         client.rxLock->unlock();
         server.clientsLock->unlock();
 
-        std::this_thread::sleep_for(10ms);
+        std::this_thread::sleep_for(1ms);
     }
 
     // Nunca vai acontecer (TODO implementar timeout de read)
