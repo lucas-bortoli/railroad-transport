@@ -174,7 +174,7 @@ void rr_server_thread_loop(rr_server_handle serverHandle)
                         break;
                     }
 
-                    printf("rr_server_thread_loop: Pacote ACK\n");
+                    printf("rr_server_thread_loop: Pacote ACK, seq=%lu\n", datagram.Body.SequenceId);
 
                     auto& client = *clientOrNull;
                     // Ao receber um ACK, remover aquele pacote da fila de transmissão para evitar reenvio
@@ -362,7 +362,7 @@ rr_sock_handle rr_server_accept_client(rr_server_handle serverHandle)
                 .rxLock = new std::mutex(),
                 .tx = new std::map<unsigned long, PendingFrame>(),
                 .txLock = new std::mutex(),
-                .windowSize = 15,
+                .windowSize = 1,
             };
             server.clients->insert_or_assign(socketHandle, client);
             server.clientsLock->unlock();
@@ -431,27 +431,26 @@ size_t rr_server_receive(rr_server_handle serverHandle, rr_sock_handle clientHan
     unsigned long wantedSeq = client.nextSequenceRx;
     client.rxLock->unlock();
 
+    printf("rr_server_receive: Aguardando quadro #%lu...\n", wantedSeq);
+
     // Aguardar quadro de dados na fila de recepção
     while (true)
     {
         using namespace std::chrono_literals;
 
         server.clientsLock->lock();
-        printf("rr_server_receive: Aguardando quadro #%lu...\n", wantedSeq);
-
         client.rxLock->lock();
         if (client.rx->count(wantedSeq))
         {
             auto& receivedFrame = client.rx->at(wantedSeq);
-
-            printf("rr_server_receive: quadro #%lu recebido\n", receivedFrame.SequenceId);
+            printf("rr_server_receive: Quadro #%lu recebido\n", receivedFrame.SequenceId);
 
             // Escrever no buffer de destino
             size_t bytesToRead = std::min(std::min(bufferSize, FRAME_BODY_LENGTH), (int)receivedFrame.BodyLength);
             std::memcpy(buffer, receivedFrame.Body, bytesToRead);
 
             client.nextSequenceRx = receivedFrame.SequenceId + 1;
-            printf("rr_server_receive: próximo quadro será #%lu\n", client.nextSequenceRx);
+            printf("rr_server_receive: Próximo quadro será #%lu\n", client.nextSequenceRx);
             client.rx->erase(receivedFrame.SequenceId);
 
             client.rxLock->unlock();

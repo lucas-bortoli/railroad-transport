@@ -10,12 +10,17 @@ void client_thread(rr_server_handle server, rr_sock_handle socket)
     int i = 0;
     while (true)
     {
-
         char buffer[FRAME_BODY_LENGTH];
         std::memset(buffer, 0, sizeof(buffer));
 
-        size_t bytesLidos = rr_server_receive(server, socket, buffer, sizeof(buffer));
-        printf("main: %zu bytes lidos: %s\n", bytesLidos, buffer);
+        //  size_t bytesLidos = rr_server_receive(server, socket, buffer, sizeof(buffer));
+        //     printf("main: %zu bytes lidos: %s\n", bytesLidos, buffer);
+
+        i++;
+        std::string payload = "Hello " + std::to_string(i);
+        rr_server_send(server, socket, payload.c_str(), payload.size());
+
+        std::this_thread::sleep_for(5ms);
     }
 }
 

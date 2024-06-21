@@ -39,11 +39,11 @@ struct RRClient
     // seja menor que esse valor, não deverá ser colocado na fila currentRx, pois entende-se que já
     // foi processado pela aplicação. No entanto, ainda deve-se responder ACK para o
     // quadro, para impedir a retransmissão do mesmo.
-    unsigned long sequenceRx;
+    unsigned long nextSequenceRx;
 
     // Contador simples de quadros transmitidos com sucesso (aqueles que receberam ACK com
     // respostas). A cada quadro NOVO gerado pelo cliente, esse valor deverá ser incrementado.
-    unsigned long nextSequenceRx;
+    unsigned long sequenceTx;
 
     // Representa os quadros recebidos. Essa fila contém apenas quadros de FrameKind::Data. Quadros
     // de SYN/ACK são processados independentemente no loop principal de IO.
@@ -107,7 +107,7 @@ void rr_client_thread_loop(rr_sock_handle handle)
                     abort();
                     break;
                 case FrameKind::Ack: {
-                    printf("rr_client_thread_loop: Pacote ACK\n");
+                    printf("rr_client_thread_loop: Pacote ACK, seq=%lu\n", datagram.Body.SequenceId);
 
                     // Ao receber um ACK, remover pacote da fila de transmissão para evitar reenvio
                     client.txLock->lock();
@@ -117,23 +117,20 @@ void rr_client_thread_loop(rr_sock_handle handle)
                     break;
                 }
                 case FrameKind::Data: {
-                    if (datagram.Body.SequenceId < client.sequenceRx)
+                    client.rxLock->lock();
+                    // É um pacote já processado pela aplicação, ou já está na fila de processamento?
+                    if (datagram.Body.SequenceId < client.nextSequenceRx || client.rx->count(datagram.Body.SequenceId))
                     {
-                        printf("rr_client_thread_loop: Pacote DATA (sequence %lu / %lu, descartado)\n",
-                               datagram.Body.SequenceId, client.sequenceRx);
+                        printf("rr_client_thread_loop: Pacote DATA (sequence %lu descartado)\n",
+                               datagram.Body.SequenceId);
                     }
                     else
                     {
-                        printf("rr_client_thread_loop: Pacote DATA (sequence %lu / %lu, aceito)\n",
-                               datagram.Body.SequenceId, client.sequenceRx);
-                        client.rxLock->lock();
+                        printf("rr_client_thread_loop: Pacote DATA (sequence %lu aceito)\n", datagram.Body.SequenceId);
+
                         client.rx->insert_or_assign(datagram.Body.SequenceId, datagram.Body);
-                        if (datagram.Body.SequenceId == client.sequenceRx + 1)
-                        {
-                            client.sequenceRx++;
-                        }
-                        client.rxLock->unlock();
                     }
+                    client.rxLock->unlock();
 
                     // Responder ACK
                     auto ackReply = SentDatagram<Frame>{
@@ -208,13 +205,13 @@ rr_sock_handle rr_client_connect(std::string address, unsigned short port)
         .handle = handle,
         .serverAddress = serverAddress,
         .ioThread = nullptr,
-        .sequenceRx = 1,
         .nextSequenceRx = 1,
+        .sequenceTx = 1,
         .rx = new std::map<unsigned long, Frame>(),
         .rxLock = new std::mutex(),
         .tx = new std::map<unsigned long, PendingFrame>(),
         .txLock = new std::mutex(),
-        .windowSize = 15,
+        .windowSize = 3,
         .ackTimeout = 500,
     };
     RRClient& client = clientHandles.at(handle);
@@ -230,7 +227,7 @@ rr_sock_handle rr_client_connect(std::string address, unsigned short port)
         .Inner =
             Frame{
                 .Kind = FrameKind::Syn,
-                .SequenceId = client.nextSequenceRx++,
+                .SequenceId = client.sequenceTx++,
                 .BodyLength = 0,
                 .Body = {0},
             },
@@ -278,7 +275,7 @@ void rr_client_send(rr_sock_handle handle, const char* buffer, int bufferSize)
         .Inner =
             Frame{
                 .Kind = FrameKind::Data,
-                .SequenceId = client.nextSequenceRx++,
+                .SequenceId = client.sequenceTx++,
                 .BodyLength = bytesToCopy,
                 .Body = {0},
             },
@@ -297,25 +294,28 @@ size_t rr_client_receive(rr_sock_handle handle, char* buffer, int bufferSize)
     }
 
     RRClient& client = clientHandles.at(handle);
-    unsigned long wantedSeq = client.sequenceRx;
+    unsigned long wantedSeq = client.nextSequenceRx;
+
+    printf("rr_client_receive: Aguardando quadro #%lu...\n", wantedSeq);
 
     // Aguardar quadro de dados na fila de recepção
     while (true)
     {
         using namespace std::chrono_literals;
 
-        printf("rr_client_receive: Aguardando quadro #%lu...\n", wantedSeq);
-
         client.rxLock->lock();
         if (!client.rx->empty())
         {
             auto& receivedFrame = client.rx->at(wantedSeq);
+            printf("rr_client_receive: Quadro #%lu recebido\n", receivedFrame.SequenceId);
 
             // Escrever no buffer de destino
             size_t bytesToRead = std::min(std::min(bufferSize, FRAME_BODY_LENGTH), (int)receivedFrame.BodyLength);
             std::memcpy(buffer, receivedFrame.Body, bytesToRead);
 
-            client.rx->erase(wantedSeq);
+            client.nextSequenceRx = receivedFrame.SequenceId + 1;
+            printf("rr_client_receive: Próximo quadro será #%lu\n", client.nextSequenceRx);
+            client.rx->erase(receivedFrame.SequenceId);
             client.rxLock->unlock();
 
             return bytesToRead;
