@@ -1,3 +1,7 @@
+<center>
+  <img src="docs/logo.png">
+</center>
+
 # Compilar e executar no Windows
 
 É preciso usar o MSYS2, no ambiente MSYS (camada de compatibilidade POSIX) exclusivamente.
