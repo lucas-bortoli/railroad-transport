@@ -146,7 +146,17 @@ void rr_server_thread_loop(rr_server_handle serverHandle)
             switch (datagram.Body.Kind)
             {
                 case FrameKind::Syn: {
-                    printf("rr_server_thread_loop: Pacote SYN\n");
+                    server.clientsLock->lock();
+                    auto existingClientOrNull = get_client_from_client_address(serverHandle, datagram.SourceAddress);
+                    server.clientsLock->unlock();
+
+                    if (existingClientOrNull != nullptr)
+                    {
+                        printf("rr_server_thread_loop: Pacote SYN recebido, mas já existia um cliente registrado nesse "
+                               "endereço e porta. Ignorando pacote.\n");
+                        break;
+                    }
+
                     server.pendingSynLock->lock();
                     bool isDuplicate = false;
                     for (auto previousSyn : *server.pendingSyn)
@@ -159,6 +169,7 @@ void rr_server_thread_loop(rr_server_handle serverHandle)
                     }
                     if (!isDuplicate)
                     {
+                        printf("rr_server_thread_loop: Pacote SYN recebido, nova conexão pendente...\n");
                         server.pendingSyn->push_back(datagram.SourceAddress);
                     }
                     server.pendingSynLock->unlock();
