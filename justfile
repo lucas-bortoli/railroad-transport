@@ -14,10 +14,17 @@ build_server:
 run_server: build_server
   ./main_server
 
+[windows]
+build_client:
+  g++ -g -Wall -static -o main_client.exe -I src_railroad src_railroad/*.cpp src_client/*.cpp
+
+[windows]
+run_client: build_client
+  ./main_client.exe
 
 [windows]
 build_server:
-  g++ -g -Wall -o main_server.exe -I src_railroad src_railroad/*.cpp src_server/*.cpp
+  g++ -g -Wall -static -o main_server.exe -I src_railroad src_railroad/*.cpp src_server/*.cpp
 
 [windows]
 run_server: build_server
