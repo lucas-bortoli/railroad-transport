@@ -214,7 +214,7 @@ rr_sock_handle rr_client_connect(std::string address, unsigned short port)
         .rxLock = new std::mutex(),
         .tx = new std::map<unsigned long, PendingFrame>(),
         .txLock = new std::mutex(),
-        .windowSize = 3,
+        .windowSize = 15,
         .ackTimeout = 500,
     };
     RRClient& client = clientHandles.at(handle);
