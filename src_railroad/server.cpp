@@ -76,6 +76,9 @@ struct RRServer
 
     // Quanto tempo, em millisegundos, esperar um ACK antes de retransmitir um quadro
     unsigned long long ackTimeout;
+
+    // Número máximo de transmissões da fila. Chamadas subsequentes de rr_server_send irão bloquear a thread até haver espaço suficiente na fila.
+    int maximumTxQueueSize;
 };
 
 static std::atomic<unsigned long> idAllocator{0};
@@ -313,6 +316,7 @@ rr_server_handle rr_server_bind(std::string listenAddress, unsigned short listen
         .pendingSyn = new std::deque<sockaddr_in>(),
         .pendingSynLock = new std::mutex(),
         .ackTimeout = 500, // timeout de 500 ms
+        .maximumTxQueueSize = 64, // até 64 itens na fila de transmissão
     };
 
     // Criar thread e deixar thread executando após essa função retornar
@@ -407,6 +411,20 @@ void rr_server_send(rr_server_handle serverHandle, rr_sock_handle clientHandle, 
 
     RRServer& server = serverHandles[serverHandle];
     RRServerClient& client = server.clients->at(clientHandle);
+
+    // Aguardar fila de transmissão haver espaço
+    while (true) {
+        using namespace std::chrono_literals;
+        client.txLock->lock();
+        if (client.tx->size() >= server.maximumTxQueueSize) {
+            printf("rr_server_send: Fila de transmissão cheia, bloqueando thread até haver espaço...\n");
+            client.txLock->unlock();
+            std::this_thread::sleep_for(1ms);
+        } else {
+            client.txLock->unlock();
+            break;
+        }
+    }
 
     client.txLock->lock();
     PendingFrame frame = {

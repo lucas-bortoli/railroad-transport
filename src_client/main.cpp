@@ -20,15 +20,9 @@ int main(int argc, char** argv)
 
         batch++;
 
-        i++;
-        packet = "Hello Man " + std::to_string(i) + " (batch " + std::to_string(batch) + ")";
-        rr_client_send(socket, packet.c_str(), packet.size());
-        i++;
-        packet = "Hello Man " + std::to_string(i) + " (batch " + std::to_string(batch) + ")";
-        rr_client_send(socket, packet.c_str(), packet.size());
-        i++;
-        packet = "Hello Man " + std::to_string(i) + " (batch " + std::to_string(batch) + ")";
-        rr_client_send(socket, packet.c_str(), packet.size());
+        // i++;
+        // packet = "Hello Man " + std::to_string(i) + " (batch " + std::to_string(batch) + ")";
+        // rr_client_send(socket, packet.c_str(), packet.size());
 
         char buffer[FRAME_BODY_LENGTH];
         std::memset(buffer, 0, sizeof(buffer));
@@ -36,7 +30,7 @@ int main(int argc, char** argv)
         size_t bytesLidos = rr_client_receive(socket, buffer, sizeof(buffer));
         printf("main: %zu bytes lidos: %s\n", bytesLidos, buffer);
 
-        std::this_thread::sleep_for(1ms);
+       // std::this_thread::sleep_for(1ms);
     }
 
     rr_client_close(socket);

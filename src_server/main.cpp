@@ -20,7 +20,7 @@ void client_thread(rr_server_handle server, rr_sock_handle socket)
         std::string payload = "Hello " + std::to_string(i);
         rr_server_send(server, socket, payload.c_str(), payload.size());
 
-        std::this_thread::sleep_for(5ms);
+       // std::this_thread::sleep_for(5ms);
     }
 }
 

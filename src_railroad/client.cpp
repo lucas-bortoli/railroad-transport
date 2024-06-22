@@ -60,6 +60,9 @@ struct RRClient
 
     // Quanto tempo, em millisegundos, esperar um ACK antes de retransmitir um quadro
     unsigned long long ackTimeout;
+
+    // Número máximo de transmissões da fila. Chamadas subsequentes de rr_server_send irão bloquear a thread até haver espaço suficiente na fila.
+    int maximumTxQueueSize;
 };
 
 static std::atomic<unsigned long> idAllocator{0};
@@ -213,6 +216,7 @@ rr_sock_handle rr_client_connect(std::string address, unsigned short port)
         .txLock = new std::mutex(),
         .windowSize = 3,
         .ackTimeout = 500,
+        .maximumTxQueueSize = 64,
     };
     RRClient& client = clientHandles.at(handle);
 
@@ -267,6 +271,20 @@ void rr_client_send(rr_sock_handle handle, const char* buffer, int bufferSize)
     unsigned int bytesToCopy = std::min(bufferSize, FRAME_BODY_LENGTH);
 
     RRClient& client = clientHandles.at(handle);
+
+        // Aguardar fila de transmissão haver espaço
+    while (true) {
+        using namespace std::chrono_literals;
+        client.txLock->lock();
+        if (client.tx->size() >= client.maximumTxQueueSize) {
+            printf("rr_client_send: Fila de transmissão cheia, bloqueando thread até haver espaço...\n");
+            client.txLock->unlock();
+            std::this_thread::sleep_for(1ms);
+        } else {
+            client.txLock->unlock();
+            break;
+        }
+    }
 
     client.txLock->lock();
     PendingFrame frame = {
