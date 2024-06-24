@@ -272,7 +272,7 @@ void rr_client_send(rr_sock_handle handle, const char* buffer, int bufferSize)
 
     RRClient& client = clientHandles.at(handle);
 
-        // Aguardar fila de transmissão haver espaço
+    // Aguardar fila de transmissão haver espaço
     while (true) {
         using namespace std::chrono_literals;
         client.txLock->lock();
