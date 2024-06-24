@@ -75,5 +75,6 @@
     "set": "cpp",
     "shared_mutex": "cpp",
     "codecvt": "cpp"
-  }
+  },
+  "C_Cpp.default.compilerPath": "C:/msys64/usr/bin/g++.exe"
 }
