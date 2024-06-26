@@ -38,14 +38,14 @@ typedef unsigned long rr_sock_handle;
 
 rr_server_handle rr_server_bind(std::string address, unsigned short port);
 rr_sock_handle rr_server_accept_client(rr_server_handle serverHandle);
-void rr_server_send(rr_server_handle serverHandle, rr_sock_handle clientHandle, const char* buffer, int bufferSize);
-size_t rr_server_receive(rr_server_handle serverHandle, rr_sock_handle clientHandle, char* buffer, int bufferSize);
+ssize_t rr_server_send(rr_server_handle serverHandle, rr_sock_handle clientHandle, const char* buffer, int bufferSize);
+ssize_t rr_server_receive(rr_server_handle serverHandle, rr_sock_handle clientHandle, char* buffer, int bufferSize);
 // Termina a conexão com um cliente específico
-void rr_server_close_client(rr_server_handle serverHandle, rr_sock_handle clientHandle);
-void rr_server_close(rr_server_handle serverHandle);
+ssize_t rr_server_close_client(rr_server_handle serverHandle, rr_sock_handle clientHandle);
+ssize_t rr_server_close(rr_server_handle serverHandle);
 
 rr_sock_handle rr_client_connect(std::string address, unsigned short port);
-void rr_client_send(rr_sock_handle handle, const char* buffer, int bufferSize);
-size_t rr_client_receive(rr_sock_handle handle, char* buffer, int bufferSize);
+ssize_t rr_client_send(rr_sock_handle handle, const char* buffer, int bufferSize);
+ssize_t rr_client_receive(rr_sock_handle handle, char* buffer, int bufferSize);
 // Termina a conexão com o servidor
-void rr_client_close(rr_sock_handle handle);
+ssize_t rr_client_close(rr_sock_handle handle);

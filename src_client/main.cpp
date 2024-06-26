@@ -1,4 +1,5 @@
 #include "transport.h"
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -18,6 +19,11 @@ int main(int argc, char** argv)
         std::memset(buffer, 0, sizeof(buffer));
 
         size_t bytesLidos = rr_client_receive(socket, buffer, sizeof(buffer));
+        if (bytesLidos < 0)
+        {
+            fprintf(stderr, "main: Erro ao receber: %s\n", strerror(errno));
+            break;
+        }
         printf("main: %zu bytes lidos: %s\n", bytesLidos, buffer);
     }
 

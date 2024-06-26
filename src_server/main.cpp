@@ -18,7 +18,12 @@ void client_thread(rr_server_handle server, rr_sock_handle socket)
 
         i++;
         std::string payload = "Hello " + std::to_string(i);
-        rr_server_send(server, socket, payload.c_str(), payload.size());
+        ssize_t err = rr_server_send(server, socket, payload.c_str(), payload.size());
+        if (err < 0)
+        {
+            fprintf(stderr, "main: Erro ao enviar: %s\n", strerror(errno));
+            break;
+        }
     }
 }
 
@@ -35,10 +40,10 @@ int main(int argc, char** argv)
 
         printf("main: Novo cliente: %ld\n", client);
 
-        std::this_thread::sleep_for(1000ms);
-
         auto t = new std::thread(&client_thread, server, client);
         t->detach();
+
+        std::this_thread::sleep_for(1000ms);
     }
 
     rr_server_close(server);

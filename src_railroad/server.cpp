@@ -57,6 +57,12 @@ struct RRServerClient
 
     // Tamanho da janela de recepção/envio simultâneo. Deve ser >= 1.
     unsigned int windowSize;
+
+    // Contador de erros para abortar conexão. O funcionamento é o seguinte: ao criar o cliente, ele começa em 0. Ao
+    // receber um ACK com sucesso, decrementar o contador. Ao ter que retransmitir um pacote por não receber um ACK,
+    // incrementar contador. Se passar se um threshold, abortar conexão. O contador nunca é menor que zero.
+    int errorCounter;
+    std::mutex* errorCounterLock;
 };
 
 struct RRServer
@@ -77,8 +83,12 @@ struct RRServer
     // Quanto tempo, em millisegundos, esperar um ACK antes de retransmitir um quadro
     unsigned long long ackTimeout;
 
-    // Número máximo de transmissões da fila. Chamadas subsequentes de rr_server_send irão bloquear a thread até haver espaço suficiente na fila.
+    // Número máximo de transmissões da fila. Chamadas subsequentes de rr_server_send irão bloquear a thread até haver
+    // espaço suficiente na fila.
     int maximumTxQueueSize;
+
+    // Threshold do contador de erros. Ao chegar nesse valor, a conexão com o cliente é abortada.
+    int maximumErrorsByConnection;
 };
 
 static std::atomic<unsigned long> idAllocator{0};
@@ -86,7 +96,6 @@ static std::unordered_map<rr_server_handle, RRServer> serverHandles;
 
 RRServerClient* get_client_from_client_address(rr_server_handle serverHandle, sockaddr_in clientAddress)
 {
-
     if (!serverHandles.count(serverHandle))
         return nullptr;
 
@@ -104,12 +113,13 @@ RRServerClient* get_client_from_client_address(rr_server_handle serverHandle, so
     return nullptr;
 }
 
-void rr_invalidate_client(RRServerClient& client)
+void rr_free_client_allocations(RRServerClient& client)
 {
     delete client.rx;
     delete client.rxLock;
     delete client.tx;
     delete client.txLock;
+    delete client.errorCounterLock;
 }
 
 void rr_server_thread_loop(rr_server_handle serverHandle)
@@ -195,6 +205,13 @@ void rr_server_thread_loop(rr_server_handle serverHandle)
                     client.txLock->lock();
                     client.tx->erase(datagram.Body.SequenceId);
                     client.txLock->unlock();
+
+                    // Diminuir o counter de erros de transmissão
+                    client.errorCounterLock->lock();
+                    client.errorCounter--;
+                    if (client.errorCounter <= 0)
+                        client.errorCounter = 0;
+                    client.errorCounterLock->unlock();
                     break;
                 }
                 case FrameKind::Data: {
@@ -251,11 +268,22 @@ void rr_server_thread_loop(rr_server_handle serverHandle)
                 auto now = timeInMilliseconds();
                 if (now - sentFrameCopy.TxTimestamp >= server.ackTimeout)
                 {
+                    bool wasFirstTransmission = sentFrameCopy.TxTimestamp == 0;
+
                     client.tx->at(sentFrameCopy.Inner.SequenceId).TxTimestamp = timeInMilliseconds();
                     rr_datagram_send<Frame>(server.fd, SentDatagram<Frame>{
                                                            .TargetAddress = client.address,
                                                            .Body = sentFrameCopy.Inner,
                                                        });
+
+                    if (!wasFirstTransmission)
+                    {
+                        // Não era a primeira transmissão, indicando que o pacote foi reenviado por não receber o ACK
+                        // correspondente. Nesse caso, incrementar o counter de erros de transmissão.
+                        client.errorCounterLock->lock();
+                        client.errorCounter++;
+                        client.errorCounterLock->unlock();
+                    }
                 }
             }
             client.txLock->unlock();
@@ -315,8 +343,9 @@ rr_server_handle rr_server_bind(std::string listenAddress, unsigned short listen
         .clients = new std::unordered_map<rr_sock_handle, RRServerClient>(),
         .pendingSyn = new std::deque<sockaddr_in>(),
         .pendingSynLock = new std::mutex(),
-        .ackTimeout = 500, // timeout de 500 ms
-        .maximumTxQueueSize = 64, // até 64 itens na fila de transmissão
+        .ackTimeout = 500,              // timeout de 500 ms
+        .maximumTxQueueSize = 64,       // até 64 itens na fila de transmissão
+        .maximumErrorsByConnection = 8, // quantos quadros podem falhar retransmissão até desistir da conexão?
     };
 
     // Criar thread e deixar thread executando após essa função retornar
@@ -378,6 +407,8 @@ rr_sock_handle rr_server_accept_client(rr_server_handle serverHandle)
                 .tx = new std::map<unsigned long, PendingFrame>(),
                 .txLock = new std::mutex(),
                 .windowSize = 1,
+                .errorCounter = 0,
+                .errorCounterLock = new std::mutex(),
             };
             server.clients->insert_or_assign(socketHandle, client);
             server.clientsLock->unlock();
@@ -396,7 +427,7 @@ rr_sock_handle rr_server_accept_client(rr_server_handle serverHandle)
     return -1;
 }
 
-void rr_server_send(rr_server_handle serverHandle, rr_sock_handle clientHandle, const char* buffer, int bufferSize)
+ssize_t rr_server_send(rr_server_handle serverHandle, rr_sock_handle clientHandle, const char* buffer, int bufferSize)
 {
     if (!serverHandles.count(serverHandle))
     {
@@ -404,7 +435,8 @@ void rr_server_send(rr_server_handle serverHandle, rr_sock_handle clientHandle, 
                 "rr_server_send: Tentou usar uma handle de servidor que não existe "
                 "(%ld)\n",
                 serverHandle);
-        abort();
+        errno = EBADF;
+        return -EBADF;
     }
 
     unsigned int bytesToCopy = std::min(bufferSize, FRAME_BODY_LENGTH);
@@ -413,14 +445,30 @@ void rr_server_send(rr_server_handle serverHandle, rr_sock_handle clientHandle, 
     RRServerClient& client = server.clients->at(clientHandle);
 
     // Aguardar fila de transmissão haver espaço
-    while (true) {
+    while (true)
+    {
         using namespace std::chrono_literals;
+
+        // Verificar se a conexão está funcionando bem o suficiente, abortar returnando um erro senão
+        client.errorCounterLock->lock();
+        if (client.errorCounter >= server.maximumErrorsByConnection)
+        {
+            client.errorCounterLock->unlock();
+            rr_server_close_client(serverHandle, clientHandle);
+            errno = ECONNABORTED;
+            return -ECONNABORTED;
+        }
+        client.errorCounterLock->unlock();
+
         client.txLock->lock();
-        if (client.tx->size() >= server.maximumTxQueueSize) {
+        if (client.tx->size() >= (size_t)server.maximumTxQueueSize)
+        {
             printf("rr_server_send: Fila de transmissão cheia, bloqueando thread até haver espaço...\n");
             client.txLock->unlock();
             std::this_thread::sleep_for(1ms);
-        } else {
+        }
+        else
+        {
             client.txLock->unlock();
             break;
         }
@@ -441,9 +489,11 @@ void rr_server_send(rr_server_handle serverHandle, rr_sock_handle clientHandle, 
     std::memcpy(&frame.Inner.Body, buffer, bytesToCopy);
     client.tx->insert_or_assign(frame.Inner.SequenceId, frame);
     client.txLock->unlock();
+
+    return 0;
 }
 
-size_t rr_server_receive(rr_server_handle serverHandle, rr_sock_handle clientHandle, char* buffer, int bufferSize)
+ssize_t rr_server_receive(rr_server_handle serverHandle, rr_sock_handle clientHandle, char* buffer, int bufferSize)
 {
     if (!serverHandles.count(serverHandle))
     {
@@ -451,7 +501,8 @@ size_t rr_server_receive(rr_server_handle serverHandle, rr_sock_handle clientHan
                 "rr_server_send: Tentou usar uma handle de servidor que não existe "
                 "(%ld)\n",
                 serverHandle);
-        abort();
+        errno = EBADF;
+        return -EBADF;
     }
 
     RRServer& server = serverHandles.at(serverHandle);
@@ -466,6 +517,17 @@ size_t rr_server_receive(rr_server_handle serverHandle, rr_sock_handle clientHan
     while (true)
     {
         using namespace std::chrono_literals;
+
+        // Verificar se a conexão está funcionando bem o suficiente, abortar returnando um erro senão
+        client.errorCounterLock->lock();
+        if (client.errorCounter >= server.maximumErrorsByConnection)
+        {
+            client.errorCounterLock->unlock();
+            rr_server_close_client(serverHandle, clientHandle);
+            errno = ECONNABORTED;
+            return -ECONNABORTED;
+        }
+        client.errorCounterLock->unlock();
 
         server.clientsLock->lock();
         client.rxLock->lock();
@@ -498,45 +560,50 @@ size_t rr_server_receive(rr_server_handle serverHandle, rr_sock_handle clientHan
 }
 
 // Termina a conexão com um cliente específico
-void rr_server_close_client(rr_server_handle serverHandle, rr_sock_handle clientHandle)
+ssize_t rr_server_close_client(rr_server_handle serverHandle, rr_sock_handle clientHandle)
 {
     if (!serverHandles.count(serverHandle))
     {
         // avisar, mas não tomar nenhuma ação
         fprintf(stderr, "rr_server_close_client: chamado mas não havia um servidor aberto com o handle %lu\n",
                 serverHandle);
-        return;
+        errno = EBADF;
+        return -EBADF;
     }
 
     RRServer& server = serverHandles.at(serverHandle);
 
     std::lock_guard clientsLock(*server.clientsLock);
-    if (server.clients->count(clientHandle))
+    if (!server.clients->count(clientHandle))
     {
         fprintf(stderr, "rr_server_close_client: cliente dado (%lu) não existe\n", clientHandle);
-        return;
+        errno = EBADF;
+        return -EBADF;
     }
 
     RRServerClient& client = server.clients->at(clientHandle);
 
-    rr_invalidate_client(client);
+    rr_free_client_allocations(client);
     server.clients->erase(client.handle);
+
+    return 0;
 }
 
-void rr_server_close(rr_server_handle serverHandle)
+ssize_t rr_server_close(rr_server_handle serverHandle)
 {
     if (!serverHandles.count(serverHandle))
     {
         // avisar, mas não tomar nenhuma ação
         fprintf(stderr, "rr_server_close: chamado mas não havia um servidor aberto com o handle %ld\n", serverHandle);
-        return;
+        errno = EBADF;
+        return -EBADF;
     }
 
     RRServer& server = serverHandles.at(serverHandle);
 
     server.clientsLock->lock();
     for (auto& [_, client] : *server.clients)
-        rr_invalidate_client(client);
+        rr_free_client_allocations(client);
     server.clientsLock->unlock();
 
     delete server.ioThread;
@@ -546,4 +613,6 @@ void rr_server_close(rr_server_handle serverHandle)
     delete server.pendingSynLock;
 
     serverHandles.erase(serverHandle);
+
+    return 0;
 }

@@ -61,8 +61,18 @@ struct RRClient
     // Quanto tempo, em millisegundos, esperar um ACK antes de retransmitir um quadro
     unsigned long long ackTimeout;
 
-    // Número máximo de transmissões da fila. Chamadas subsequentes de rr_server_send irão bloquear a thread até haver espaço suficiente na fila.
+    // Número máximo de transmissões da fila. Chamadas subsequentes de rr_server_send irão bloquear a thread até haver
+    // espaço suficiente na fila.
     int maximumTxQueueSize;
+
+    // Contador de erros para abortar conexão. O funcionamento é o seguinte: ao criar o cliente, ele começa em 0. Ao
+    // receber um ACK com sucesso, decrementar o contador. Ao ter que retransmitir um pacote por não receber um ACK,
+    // incrementar contador. Se passar se um threshold, abortar conexão. O contador nunca é menor que zero.
+    int errorCounter;
+    std::mutex* errorCounterLock;
+
+    // Threshold do contador de erros. Ao chegar nesse valor, a conexão com o servidor é abortada.
+    int maximumErrors;
 };
 
 static std::atomic<unsigned long> idAllocator{0};
@@ -107,7 +117,9 @@ void rr_client_thread_loop(rr_sock_handle handle)
             {
                 case FrameKind::Syn:
                     fprintf(stderr, "rr_client_thread_loop: Pacote SYN recebido pelo cliente, operação inválida.\n");
-                    abort();
+                    client.errorCounterLock->lock();
+                    client.errorCounter = 999999; // Sentenciar essa conexão a morte
+                    client.errorCounterLock->unlock();
                     break;
                 case FrameKind::Ack: {
                     printf("rr_client_thread_loop: Pacote ACK, seq=%lu\n", datagram.Body.SequenceId);
@@ -116,6 +128,13 @@ void rr_client_thread_loop(rr_sock_handle handle)
                     client.txLock->lock();
                     client.tx->erase(datagram.Body.SequenceId);
                     client.txLock->unlock();
+
+                    // Diminuir o counter de erros de transmissão
+                    client.errorCounterLock->lock();
+                    client.errorCounter--;
+                    if (client.errorCounter <= 0)
+                        client.errorCounter = 0;
+                    client.errorCounterLock->unlock();
 
                     break;
                 }
@@ -156,6 +175,8 @@ void rr_client_thread_loop(rr_sock_handle handle)
         auto txCandidates = rr_peek_first_n_items_tx<PendingFrame>(*client.tx, client.windowSize);
         for (const auto& sentFrameCopy : txCandidates)
         {
+            bool wasFirstTransmission = sentFrameCopy.TxTimestamp == 0;
+
             auto now = timeInMilliseconds();
             if (now - sentFrameCopy.TxTimestamp >= client.ackTimeout)
             {
@@ -164,6 +185,15 @@ void rr_client_thread_loop(rr_sock_handle handle)
                                                        .TargetAddress = client.serverAddress,
                                                        .Body = sentFrameCopy.Inner,
                                                    });
+            }
+
+            if (!wasFirstTransmission)
+            {
+                // Não era a primeira transmissão, indicando que o pacote foi reenviado por não receber o ACK
+                // correspondente. Nesse caso, incrementar o counter de erros de transmissão.
+                client.errorCounterLock->lock();
+                client.errorCounter++;
+                client.errorCounterLock->unlock();
             }
         }
         client.txLock->unlock();
@@ -217,6 +247,9 @@ rr_sock_handle rr_client_connect(std::string address, unsigned short port)
         .windowSize = 3,
         .ackTimeout = 500,
         .maximumTxQueueSize = 64,
+        .errorCounter = 0,
+        .errorCounterLock = new std::mutex(),
+        .maximumErrors = 8,
     };
     RRClient& client = clientHandles.at(handle);
 
@@ -260,12 +293,13 @@ rr_sock_handle rr_client_connect(std::string address, unsigned short port)
     return handle;
 }
 
-void rr_client_send(rr_sock_handle handle, const char* buffer, int bufferSize)
+ssize_t rr_client_send(rr_sock_handle handle, const char* buffer, int bufferSize)
 {
     if (!clientHandles.count(handle))
     {
         fprintf(stderr, "rr_client_send: chamado mas não havia um socket aberto com o handle %ld\n", handle);
-        abort();
+        errno = EBADF;
+        return -EBADF;
     }
 
     unsigned int bytesToCopy = std::min(bufferSize, FRAME_BODY_LENGTH);
@@ -273,14 +307,30 @@ void rr_client_send(rr_sock_handle handle, const char* buffer, int bufferSize)
     RRClient& client = clientHandles.at(handle);
 
     // Aguardar fila de transmissão haver espaço
-    while (true) {
+    while (true)
+    {
         using namespace std::chrono_literals;
+
+        // Verificar se a conexão está funcionando bem o suficiente, abortar returnando um erro senão
+        client.errorCounterLock->lock();
+        if (client.errorCounter >= client.maximumErrors)
+        {
+            client.errorCounterLock->unlock();
+            rr_client_close(handle);
+            errno = ECONNABORTED;
+            return -ECONNABORTED;
+        }
+        client.errorCounterLock->unlock();
+
         client.txLock->lock();
-        if (client.tx->size() >= client.maximumTxQueueSize) {
+        if (client.tx->size() >= (size_t)client.maximumTxQueueSize)
+        {
             printf("rr_client_send: Fila de transmissão cheia, bloqueando thread até haver espaço...\n");
             client.txLock->unlock();
             std::this_thread::sleep_for(1ms);
-        } else {
+        }
+        else
+        {
             client.txLock->unlock();
             break;
         }
@@ -301,14 +351,17 @@ void rr_client_send(rr_sock_handle handle, const char* buffer, int bufferSize)
     std::memcpy(&frame.Inner.Body, buffer, bytesToCopy);
     client.tx->insert_or_assign(frame.Inner.SequenceId, frame);
     client.txLock->unlock();
+
+    return 0;
 }
 
-size_t rr_client_receive(rr_sock_handle handle, char* buffer, int bufferSize)
+ssize_t rr_client_receive(rr_sock_handle handle, char* buffer, int bufferSize)
 {
     if (!clientHandles.count(handle))
     {
         fprintf(stderr, "rr_client_receive: chamado mas não havia um socket aberto com o handle %ld\n", handle);
-        abort();
+        errno = EBADF;
+        return -EBADF;
     }
 
     RRClient& client = clientHandles.at(handle);
@@ -320,6 +373,17 @@ size_t rr_client_receive(rr_sock_handle handle, char* buffer, int bufferSize)
     while (true)
     {
         using namespace std::chrono_literals;
+
+        // Verificar se a conexão está funcionando bem o suficiente, abortar returnando um erro senão
+        client.errorCounterLock->lock();
+        if (client.errorCounter >= client.maximumErrors)
+        {
+            client.errorCounterLock->unlock();
+            rr_client_close(handle);
+            errno = ECONNABORTED;
+            return -ECONNABORTED;
+        }
+        client.errorCounterLock->unlock();
 
         client.rxLock->lock();
         if (!client.rx->empty())
@@ -343,17 +407,18 @@ size_t rr_client_receive(rr_sock_handle handle, char* buffer, int bufferSize)
         std::this_thread::sleep_for(1ms);
     }
 
-    // Nunca vai acontecer (TODO implementar timeout de read)
-    return -1;
+    // Nunca vai acontecer ainda (TODO implementar timeout de read)
+    return -ETIMEDOUT;
 }
 
-void rr_client_close(rr_sock_handle handle)
+ssize_t rr_client_close(rr_sock_handle handle)
 {
     if (!clientHandles.count(handle))
     {
         // avisar, mas não tomar nenhuma ação
         fprintf(stderr, "rr_client_close: chamado mas não havia um socket aberto com o handle %ld\n", handle);
-        return;
+        errno = EBADF;
+        return -EBADF;
     }
 
     RRClient& client = clientHandles[handle];
@@ -362,5 +427,8 @@ void rr_client_close(rr_sock_handle handle)
     delete client.rxLock;
     delete client.tx;
     delete client.txLock;
+    delete client.errorCounterLock;
     clientHandles.erase(handle);
+
+    return 0;
 }
