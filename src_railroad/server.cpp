@@ -77,7 +77,8 @@ struct RRServer
     // Quanto tempo, em millisegundos, esperar um ACK antes de retransmitir um quadro
     unsigned long long ackTimeout;
 
-    // Número máximo de transmissões da fila. Chamadas subsequentes de rr_server_send irão bloquear a thread até haver espaço suficiente na fila.
+    // Número máximo de transmissões da fila. Chamadas subsequentes de rr_server_send irão bloquear a thread até haver
+    // espaço suficiente na fila.
     int maximumTxQueueSize;
 };
 
@@ -157,6 +158,17 @@ void rr_server_thread_loop(rr_server_handle serverHandle)
                     {
                         printf("rr_server_thread_loop: Pacote SYN recebido, mas já existia um cliente registrado nesse "
                                "endereço e porta. Ignorando pacote.\n");
+
+                        // Responder ACK
+                        auto ackReply = SentDatagram<Frame>{
+                            .TargetAddress = datagram.SourceAddress,
+                            .Body = {.Kind = FrameKind::Ack,
+                                     .SequenceId = datagram.Body.SequenceId,
+                                     .BodyLength = 0,
+                                     .Body = {0}},
+                        };
+                        rr_datagram_send<Frame>(server.fd, ackReply);
+
                         break;
                     }
 
@@ -315,7 +327,7 @@ rr_server_handle rr_server_bind(std::string listenAddress, unsigned short listen
         .clients = new std::unordered_map<rr_sock_handle, RRServerClient>(),
         .pendingSyn = new std::deque<sockaddr_in>(),
         .pendingSynLock = new std::mutex(),
-        .ackTimeout = 500, // timeout de 500 ms
+        .ackTimeout = 500,        // timeout de 500 ms
         .maximumTxQueueSize = 64, // até 64 itens na fila de transmissão
     };
 
@@ -413,14 +425,18 @@ void rr_server_send(rr_server_handle serverHandle, rr_sock_handle clientHandle, 
     RRServerClient& client = server.clients->at(clientHandle);
 
     // Aguardar fila de transmissão haver espaço
-    while (true) {
+    while (true)
+    {
         using namespace std::chrono_literals;
         client.txLock->lock();
-        if (client.tx->size() >= server.maximumTxQueueSize) {
+        if (client.tx->size() >= server.maximumTxQueueSize)
+        {
             printf("rr_server_send: Fila de transmissão cheia, bloqueando thread até haver espaço...\n");
             client.txLock->unlock();
             std::this_thread::sleep_for(1ms);
-        } else {
+        }
+        else
+        {
             client.txLock->unlock();
             break;
         }
