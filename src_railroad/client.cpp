@@ -286,12 +286,11 @@ void rr_client_send(rr_sock_handle handle, const char* buffer, int bufferSize)
         }
         else
         {
-            client.txLock->unlock();
+            // Sair do loop sem abandonar trava da TX, usaremos imediatamente
             break;
         }
     }
 
-    client.txLock->lock();
     PendingFrame frame = {
         // Inicialmente, tempo infinito no passado para garantir primeira transmissão
         .TxTimestamp = 0,
@@ -327,7 +326,7 @@ size_t rr_client_receive(rr_sock_handle handle, char* buffer, int bufferSize)
         using namespace std::chrono_literals;
 
         client.rxLock->lock();
-        if (!client.rx->empty())
+        if (client.rx->count(wantedSeq))
         {
             auto& receivedFrame = client.rx->at(wantedSeq);
             printf("rr_client_receive: Quadro #%lu recebido\n", receivedFrame.SequenceId);

@@ -437,12 +437,11 @@ void rr_server_send(rr_server_handle serverHandle, rr_sock_handle clientHandle, 
         }
         else
         {
-            client.txLock->unlock();
+            // Sair do loop sem abandonar trava da TX, usaremos imediatamente
             break;
         }
     }
 
-    client.txLock->lock();
     PendingFrame frame = {
         // Inicialmente, tempo infinito no passado para garantir primeira transmissão
         .TxTimestamp = 0,
