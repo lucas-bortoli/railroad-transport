@@ -61,7 +61,8 @@ struct RRClient
     // Quanto tempo, em millisegundos, esperar um ACK antes de retransmitir um quadro
     unsigned long long ackTimeout;
 
-    // Número máximo de transmissões da fila. Chamadas subsequentes de rr_server_send irão bloquear a thread até haver espaço suficiente na fila.
+    // Número máximo de transmissões da fila. Chamadas subsequentes de rr_server_send irão bloquear a thread até haver
+    // espaço suficiente na fila.
     int maximumTxQueueSize;
 };
 
@@ -168,7 +169,7 @@ void rr_client_thread_loop(rr_sock_handle handle)
         }
         client.txLock->unlock();
 
-        std::this_thread::sleep_for(1ms);
+        // std::this_thread::sleep_for(1ms);
     }
 
     printf("rr_client_thread_loop: finalizando");
@@ -214,7 +215,7 @@ rr_sock_handle rr_client_connect(std::string address, unsigned short port)
         .rxLock = new std::mutex(),
         .tx = new std::map<unsigned long, PendingFrame>(),
         .txLock = new std::mutex(),
-        .windowSize = 3,
+        .windowSize = 8,
         .ackTimeout = 500,
         .maximumTxQueueSize = 64,
     };
@@ -254,7 +255,7 @@ rr_sock_handle rr_client_connect(std::string address, unsigned short port)
         }
         client.txLock->unlock();
 
-        std::this_thread::sleep_for(1ms);
+        // std::this_thread::sleep_for(1ms);
     }
 
     return handle;
@@ -273,14 +274,18 @@ void rr_client_send(rr_sock_handle handle, const char* buffer, int bufferSize)
     RRClient& client = clientHandles.at(handle);
 
     // Aguardar fila de transmissão haver espaço
-    while (true) {
+    while (true)
+    {
         using namespace std::chrono_literals;
         client.txLock->lock();
-        if (client.tx->size() >= client.maximumTxQueueSize) {
+        if (client.tx->size() >= client.maximumTxQueueSize)
+        {
             printf("rr_client_send: Fila de transmissão cheia, bloqueando thread até haver espaço...\n");
             client.txLock->unlock();
-            std::this_thread::sleep_for(1ms);
-        } else {
+            // std::this_thread::sleep_for(1ms);
+        }
+        else
+        {
             client.txLock->unlock();
             break;
         }
@@ -340,7 +345,7 @@ size_t rr_client_receive(rr_sock_handle handle, char* buffer, int bufferSize)
         }
         client.rxLock->unlock();
 
-        std::this_thread::sleep_for(1ms);
+        // std::this_thread::sleep_for(1ms);
     }
 
     // Nunca vai acontecer (TODO implementar timeout de read)

@@ -6,6 +6,10 @@
 #include <string>
 #include <vector>
 
+// Comente para reativar logs
+#define printf(...)
+#define fprintf(...)
+
 // Converter uma std::string contendo uma representação textual do IPv4 para um endereço
 in_addr_t ConvertIPv4StringToAddress(const std::string& ipAddress);
 
