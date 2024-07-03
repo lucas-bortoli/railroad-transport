@@ -161,7 +161,7 @@ void rr_client_thread_loop(rr_sock_handle handle)
             client.txLock->unlock();
         }
 
-        std::this_thread::sleep_for(1ms);
+        // std::this_thread::sleep_for(1ms);
     }
 
     printf("rr_client_thread_loop: finalizando");
@@ -253,7 +253,7 @@ rr_sock_handle rr_client_connect(std::string address, unsigned short port)
             return handle;
         }
 
-        std::this_thread::sleep_for(1ms);
+        // std::this_thread::sleep_for(1ms);
     }
 
     return handle;
@@ -307,7 +307,7 @@ void rr_client_send(rr_sock_handle handle, const char* buffer, int bufferSize)
             return;
         }
 
-        std::this_thread::sleep_for(1ms);
+        // std::this_thread::sleep_for(1ms);
     }
 }
 
@@ -344,7 +344,7 @@ size_t rr_client_receive(rr_sock_handle handle, char* buffer, int bufferSize)
         }
         client.rxLock->unlock();
 
-        std::this_thread::sleep_for(1ms);
+        // std::this_thread::sleep_for(1ms);
     }
 
     // Nunca vai acontecer (TODO implementar timeout de read)

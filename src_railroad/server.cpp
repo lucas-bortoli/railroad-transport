@@ -236,7 +236,7 @@ void rr_server_thread_loop(rr_server_handle serverHandle)
         }
         server.clientsLock->unlock();
 
-        std::this_thread::sleep_for(1ms);
+        // std::this_thread::sleep_for(1ms);
     }
 
     printf("rr_server_thread_loop: Finalizando");
@@ -363,7 +363,7 @@ rr_sock_handle rr_server_accept_client(rr_server_handle serverHandle)
         }
         server.pendingSynLock->unlock();
 
-        std::this_thread::sleep_for(1ms);
+        // std::this_thread::sleep_for(1ms);
     }
 
     // Nunca vai acontecer; loop infinito até receber novo cliente
@@ -422,7 +422,7 @@ void rr_server_send(rr_server_handle serverHandle, rr_sock_handle clientHandle, 
             return;
         }
 
-        std::this_thread::sleep_for(1ms);
+        // std::this_thread::sleep_for(1ms);
     }
 }
 
@@ -467,7 +467,7 @@ size_t rr_server_receive(rr_server_handle serverHandle, rr_sock_handle clientHan
         client.rxLock->unlock();
         server.clientsLock->unlock();
 
-        std::this_thread::sleep_for(1ms);
+        // std::this_thread::sleep_for(1ms);
     }
 
     // Nunca vai acontecer (TODO implementar timeout de read)
