@@ -7,7 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
-#define FRAME_BODY_LENGTH 256
+#define FRAME_BODY_LENGTH 1024
 
 enum class FrameKind : uint8_t
 {
